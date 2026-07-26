@@ -1,0 +1,28 @@
+# Per-account runtime state + partner config (never commit)
+infra/network_ids.json
+deploy.config.json
+.env
+
+# AgentCore local state
+agentcore.yaml
+.bedrock_agentcore*
+
+# Build artifacts
+cdk.out/
+infra/_bootstrap_build/
+infra/_tool_build/
+infra/_loader_build/
+*.zip
+
+# Scratch / debugging (not part of the handoff)
+temp/
+.hypothesis/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# OS
+.DS_Store

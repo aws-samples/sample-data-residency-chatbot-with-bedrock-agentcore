@@ -1,0 +1,1 @@
+# load.py — CSV -> Aurora via psycopg (coerce/project/resilient). Added in later tasks.

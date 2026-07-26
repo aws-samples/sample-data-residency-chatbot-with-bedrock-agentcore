@@ -1,0 +1,26 @@
+[project]
+name = "mnre-agentcore-chatbot"
+version = "0.1.0"
+description = "Data-residency-compliant NL chatbot for MNRE PM Surya Ghar (ap-south-1)"
+requires-python = ">=3.13"
+dependencies = [
+    "boto3",
+    "strands-agents",
+    "mcp",
+    "httpx",
+    "psycopg[binary]",
+    "hypothesis",
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "websockets>=16.0",
+]

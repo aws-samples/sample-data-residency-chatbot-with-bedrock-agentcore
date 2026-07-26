@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
+<title>PM Surya Ghar — MNRE Executive Dashboard</title>
+<script src="vendor/chart.umd.min.js"></script>
+<script type="module">
+  import { animate, stagger, inView } from "./vendor/motion.esm.min.js";
+  window.motionAnimate = animate; window.motionStagger = stagger; window.motionInView = inView;
+  window.dispatchEvent(new Event("motion-ready"));
+</script>
+<style>
+  :root {
+    --green:#1b7a3d; --green-dark:#145c2e; --saffron:#f5a623; --navy:#0f2c4d;
+    --bg:#eef2f1; --card:#fff; --border:#dde4e0; --text:#1c2420; --muted:#6b7770; --user:#1b7a3d;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--text); display:flex; flex-direction:column; min-height:100vh;
+  }
+  header {
+    background:linear-gradient(90deg,var(--navy),var(--green-dark) 60%,var(--green));
+    color:#fff; padding:16px 28px; box-shadow:0 2px 12px rgba(0,0,0,0.2);
+    display:flex; align-items:center; justify-content:space-between; flex:0 0 auto;
+  }
+  header .brand h1 { font-size:19px; margin:0; font-weight:700; }
+  header .brand .sub { font-size:12px; opacity:.92; margin-top:3px; }
+  header .badge { font-size:11px; padding:5px 12px; border-radius:14px; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.25); }
+
+  .layout { flex:1 1 auto; display:grid; grid-template-columns:1.55fr 1fr; gap:18px; padding:18px 20px; max-width:1540px; width:100%; margin:0 auto; }
+  @media (max-width:1000px){ .layout{ grid-template-columns:1fr; } }
+
+  .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+  .kpi { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.05); opacity:0; }
+  .kpi .label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .kpi .value { font-size:24px; font-weight:700; color:var(--navy); margin-top:6px; }
+  .kpi .delta { font-size:11px; color:var(--green); margin-top:2px; }
+
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px 18px; box-shadow:0 1px 4px rgba(0,0,0,.06); margin-bottom:16px; }
+  .panel h3 { font-size:14px; margin:0 0 12px; color:var(--navy); font-weight:600; display:flex; align-items:center; gap:8px; }
+  .charts-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:1000px){ .charts-grid{ grid-template-columns:1fr; } }
+  .chart-box { position:relative; height:230px; }
+
+  /* themed capability tiles (fills the bottom-left) */
+  .themes { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+  @media (max-width:1000px){ .themes{ grid-template-columns:repeat(2,1fr); } }
+  .theme { border:1px solid var(--border); border-radius:11px; padding:12px 13px; cursor:pointer; background:linear-gradient(180deg,#fff,#f6faf7); transition:transform .15s, box-shadow .15s; opacity:0; }
+  .theme:hover { transform:translateY(-3px); box-shadow:0 6px 16px rgba(27,122,61,.15); border-color:var(--green); }
+  .theme .ico { font-size:18px; }
+  .theme .t { font-weight:600; font-size:13px; color:var(--navy); margin:6px 0 3px; }
+  .theme .d { font-size:11px; color:var(--muted); line-height:1.35; }
+
+  /* chat */
+  .chat { background:var(--card); border:1px solid var(--border); border-radius:14px; display:flex; flex-direction:column; box-shadow:0 1px 4px rgba(0,0,0,.06); height:calc(100vh - 116px); position:sticky; top:18px; overflow:hidden; }
+  .chat .head { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; background:linear-gradient(90deg,#f6faf7,#fff); }
+  .chat .head h3 { margin:0; font-size:15px; color:var(--navy); }
+  .status { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); margin-left:auto; }
+  .status .dot { width:8px; height:8px; border-radius:50%; background:#4caf50; }
+  .status.thinking .dot { background:var(--saffron); }
+  .transcript { flex:1 1 auto; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:90%; padding:10px 14px; border-radius:14px; line-height:1.45; font-size:13.5px; white-space:pre-wrap; word-wrap:break-word; }
+  .msg.user { align-self:flex-end; background:var(--user); color:#fff; border-bottom-right-radius:4px; }
+  .msg.assistant { align-self:flex-start; background:#f3f6f4; color:var(--text); border:1px solid var(--border); border-bottom-left-radius:4px; }
+  .msg.system { align-self:center; background:transparent; color:var(--muted); font-size:12px; font-style:italic; text-align:center; max-width:95%; }
+  .thinking-row { align-self:flex-start; color:var(--muted); font-size:13px; display:flex; gap:6px; align-items:center; }
+  .thinking-row .dots span { display:inline-block; width:6px; height:6px; margin:0 1px; background:var(--muted); border-radius:50%; animation:blink 1.2s infinite both; }
+  .thinking-row .dots span:nth-child(2){ animation-delay:.2s; } .thinking-row .dots span:nth-child(3){ animation-delay:.4s; }
+  @keyframes blink { 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
+  .chips { display:flex; flex-wrap:wrap; gap:7px; padding:0 16px 10px; }
+  .chip { font-size:11.5px; padding:6px 11px; border-radius:14px; border:1px solid var(--green); color:var(--green-dark); background:#fff; cursor:pointer; transition:background .15s; }
+  .chip:hover { background:#e8f3ec; }
+  .composer { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--border); }
+  #input { flex:1 1 auto; padding:11px 14px; border:1px solid var(--border); border-radius:10px; font-size:14px; outline:none; font-family:inherit; }
+  #input:focus { border-color:var(--green); }
+  #send { flex:0 0 auto; padding:0 20px; border:none; border-radius:10px; background:var(--green); color:#fff; font-size:14px; font-weight:600; cursor:pointer; transition:background .15s; }
+  #send:hover:not(:disabled){ background:var(--green-dark); }
+  #send:disabled,#input:disabled { opacity:.55; cursor:not-allowed; }
+  .footnote { font-size:10.5px; color:var(--muted); padding:0 16px 12px; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>PM Surya Ghar — MNRE Executive Dashboard</h1>
+      <div class="sub">Rooftop-solar subsidy program · data residency: ap-south-1 (Mumbai)</div>
+    </div>
+    <div class="badge">India-hosted · in-region inference</div>
+  </header>
+
+  <div class="layout">
+    <section class="left">
+      <div class="kpis" id="kpis">
+        <div class="kpi"><div class="label">Applications</div><div class="value" data-count="20000">0</div><div class="delta">across 20 states</div></div>
+        <div class="kpi"><div class="label">Inspections Approved</div><div class="value" data-count="19991">0</div><div class="delta">99.9% pass rate</div></div>
+        <div class="kpi"><div class="label">Tranche-1 Disbursed</div><div class="value" data-prefix="₹" data-suffix="M" data-count="630.8" data-dec="1">0</div><div class="delta">to beneficiary banks</div></div>
+        <div class="kpi"><div class="label">Duplicate Accounts</div><div class="value" data-count="391">0</div><div class="delta">flagged for review</div></div>
+      </div>
+
+      <div class="panel">
+        <h3>📊 Program insights</h3>
+        <div class="charts-grid">
+          <div class="chart-box"><canvas id="stateChart"></canvas></div>
+          <div class="chart-box"><canvas id="stageChart"></canvas></div>
+          <div class="chart-box"><canvas id="bankChart"></canvas></div>
+          <div class="chart-box"><canvas id="inspChart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>🧭 What you can ask — by theme</h3>
+        <div class="themes" id="themes"></div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="chat" id="chatCard">
+        <div class="head">
+          <h3>Ask the data assistant</h3>
+          <span id="status" class="status"><span class="dot"></span><span id="statusText">ready</span></span>
+        </div>
+        <div id="transcript" class="transcript"></div>
+        <div class="chips" id="chips"></div>
+        <div class="composer">
+          <input id="input" type="text" placeholder="e.g. How many applications are in the Vendor Selection stage?" autocomplete="off" />
+          <button id="send">Send</button>
+        </div>
+        <div class="footnote">Secure regional endpoint · ap-south-1 · answers computed live from program data</div>
+      </div>
+    </aside>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+  // Regional REST API endpoint (ap-south-1, no CloudFront). The deploy step
+  // substitutes the real API id; override at runtime with ?api=https://...
+  var DEFAULT_API = "https://<REST_API_ID>.execute-api.ap-south-1.amazonaws.com/prod/chat";
+  function resolveEndpoint(){ try{ var p=new URLSearchParams(location.search).get("api"); if(p&&/^https:\/\//i.test(p))return p; }catch(e){} return DEFAULT_API; }
+  var API_ENDPOINT = resolveEndpoint();
+  var SESSION_ID = "ui-" + Math.random().toString(36).slice(2) + "-" + Date.now();
+
+  var MNRE_GREEN="#1b7a3d", SAFFRON="#f5a623", NAVY="#0f2c4d";
+
+  // ---- Themed capability tiles (fills bottom-left, drives chips) ----------
+  var THEMES = [
+    { ico:"📈", t:"Progress & Funnel", d:"Applications by stage, state & district",
+      q:"How many applications are in each stage?" },
+    { ico:"💰", t:"Financial & Subsidy", d:"Sanction, disbursement & tranches by bank",
+      q:"What is the total disbursed subsidy by bank?" },
+    { ico:"🛡️", t:"Fraud & Anomaly", d:"Duplicate accounts & repeat beneficiaries",
+      q:"How many customers have taken the subsidy twice?" },
+    { ico:"🏦", t:"Bank-wise", d:"Disbursement volume & value per bank",
+      q:"Which banks received the most subsidy disbursement?" },
+    { ico:"🗺️", t:"Geography", d:"State & district level breakdowns",
+      q:"How many applications are in Maharashtra?" },
+    { ico:"⏱️", t:"Turnaround (TAT)", d:"Average days between lifecycle stages",
+      q:"What is the average number of days from registration to sanction?" }
+  ];
+
+  // ---- Charts -------------------------------------------------------------
+  function bootCharts(){
+    if(!window.Chart) return;
+    Chart.defaults.font.family="-apple-system,Segoe UI,Roboto,sans-serif"; Chart.defaults.font.size=11;
+    new Chart(document.getElementById("stateChart"),{ type:"bar",
+      data:{ labels:["Maharashtra","Andhra Pradesh","West Bengal","Gujarat","Odisha","Telangana","Rajasthan","Karnataka"],
+        datasets:[{ label:"Applications", data:[14473,1680,986,620,335,180,167,118], backgroundColor:MNRE_GREEN, borderRadius:4 }] },
+      options:{ animation:{duration:900}, plugins:{legend:{display:false}, title:{display:true,text:"Top states by applications"}}, scales:{y:{beginAtZero:true}} } });
+    new Chart(document.getElementById("stageChart"),{ type:"doughnut",
+      data:{ labels:["Vendor Selection","Subsidy Request","Feasibility","Application"],
+        datasets:[{ data:[19947,33,19,1], backgroundColor:[MNRE_GREEN,SAFFRON,NAVY,"#9bbf57"] }] },
+      options:{ animation:{animateRotate:true,duration:1000}, plugins:{legend:{position:"bottom"}, title:{display:true,text:"Applications by stage"}} } });
+    new Chart(document.getElementById("bankChart"),{ type:"bar",
+      data:{ labels:["State Bank of India","Bank of Baroda","Canara Bank","Punjab Natl. Bank","Union Bank"],
+        datasets:[{ label:"₹ disbursed (M)", data:[548.4,46.1,45.4,41.1,12.8], backgroundColor:SAFFRON, borderRadius:4 }] },
+      options:{ indexAxis:"y", animation:{duration:900}, plugins:{legend:{display:false}, title:{display:true,text:"Tranche-1 disbursed by bank (₹M)"}}, scales:{x:{beginAtZero:true}} } });
+    new Chart(document.getElementById("inspChart"),{ type:"doughnut",
+      data:{ labels:["Approved","Returned for correction"], datasets:[{ data:[19991,9], backgroundColor:[MNRE_GREEN,"#d9534f"] }] },
+      options:{ animation:{animateRotate:true,duration:1000}, plugins:{legend:{position:"bottom"}, title:{display:true,text:"Inspection outcomes"}} } });
+  }
+
+  // ---- Count-up KPI animation --------------------------------------------
+  function animateCounts(){
+    document.querySelectorAll(".kpi .value").forEach(function(el){
+      var target=parseFloat(el.getAttribute("data-count")||"0");
+      var dec=parseInt(el.getAttribute("data-dec")||"0",10);
+      var pre=el.getAttribute("data-prefix")||"", suf=el.getAttribute("data-suffix")||"";
+      var start=performance.now(), dur=1100;
+      function tick(now){
+        var p=Math.min(1,(now-start)/dur), eased=1-Math.pow(1-p,3), v=target*eased;
+        el.textContent=pre+(dec?v.toFixed(dec):Math.round(v).toLocaleString("en-IN"))+suf;
+        if(p<1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+
+  // ---- Motion entrance animations ----------------------------------------
+  function bootMotion(){
+    var a=window.motionAnimate;
+    if(!a){ document.querySelectorAll(".kpi,.theme").forEach(function(e){e.style.opacity=1;}); return; }
+    a(".kpi",{opacity:[0,1],transform:["translateY(12px)","translateY(0)"]},{duration:.5,delay:window.motionStagger?window.motionStagger(.08):0});
+    a(".theme",{opacity:[0,1],transform:["translateY(14px)","translateY(0)"]},{duration:.5,delay:window.motionStagger?window.motionStagger(.06,{startDelay:.3}):0});
+    a("#chatCard",{opacity:[0,1],transform:["translateX(18px)","translateX(0)"]},{duration:.6});
+  }
+
+  // ---- Chat ---------------------------------------------------------------
+  var transcript=document.getElementById("transcript"), input=document.getElementById("input"),
+      sendBtn=document.getElementById("send"), statusEl=document.getElementById("status"),
+      statusText=document.getElementById("statusText"), chips=document.getElementById("chips"),
+      themesEl=document.getElementById("themes");
+  var awaiting=false, thinkingEl=null;
+  var EXAMPLES=[
+    "How many applications are in the Vendor Selection stage?",
+    "Total disbursed subsidy by bank",
+    "How many duplicate bank accounts exist?",
+    "How many customers have taken the subsidy twice?"
+  ];
+
+  function scrollBottom(){ transcript.scrollTop=transcript.scrollHeight; }
+  function addMessage(role,text){
+    var d=document.createElement("div"); d.className="msg "+role; d.textContent=text;
+    transcript.appendChild(d);
+    if(window.motionAnimate) window.motionAnimate(d,{opacity:[0,1],transform:["translateY(8px)","translateY(0)"]},{duration:.35});
+    scrollBottom(); return d;
+  }
+  function showThinking(){
+    if(thinkingEl) return;
+    thinkingEl=document.createElement("div"); thinkingEl.className="thinking-row";
+    var l=document.createElement("span"); l.textContent="Analysing the data";
+    var dots=document.createElement("span"); dots.className="dots"; dots.innerHTML="<span></span><span></span><span></span>";
+    thinkingEl.appendChild(l); thinkingEl.appendChild(dots); transcript.appendChild(thinkingEl); scrollBottom();
+    statusEl.className="status thinking"; statusText.textContent="thinking…";
+  }
+  function removeThinking(){ if(thinkingEl&&thinkingEl.parentNode) thinkingEl.parentNode.removeChild(thinkingEl); thinkingEl=null; statusEl.className="status"; statusText.textContent="ready"; }
+  function setEnabled(on){ input.disabled=!on; sendBtn.disabled=!on; if(on) input.focus(); }
+
+  function ask(q){
+    if(!q||awaiting) return;
+    addMessage("user",q); input.value=""; awaiting=true; setEnabled(false); showThinking();
+    fetch(API_ENDPOINT,{ method:"POST", headers:{"content-type":"application/json"},
+      body:JSON.stringify({question:q, sessionId:SESSION_ID}) })
+      .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+      .then(function(data){ removeThinking(); addMessage("assistant",(data&&(data.answer||data.message))||"(no answer)"); })
+      .catch(function(err){ removeThinking(); addMessage("system","Sorry, something went wrong ("+(err&&err.message?err.message:"network")+"). Please try again."); })
+      .then(function(){ awaiting=false; setEnabled(true); });
+  }
+  function sendQuestion(){ ask(input.value.trim()); }
+
+  sendBtn.addEventListener("click",sendQuestion);
+  input.addEventListener("keydown",function(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendQuestion(); } });
+  EXAMPLES.forEach(function(q){ var c=document.createElement("button"); c.className="chip"; c.type="button"; c.textContent=q; c.addEventListener("click",function(){ input.value=q; input.focus(); }); chips.appendChild(c); });
+  THEMES.forEach(function(th){
+    var el=document.createElement("div"); el.className="theme";
+    el.innerHTML='<div class="ico">'+th.ico+'</div><div class="t"></div><div class="d"></div>';
+    el.querySelector(".t").textContent=th.t; el.querySelector(".d").textContent=th.d;
+    el.addEventListener("click",function(){ ask(th.q); });
+    themesEl.appendChild(el);
+  });
+
+  // ---- Boot ---------------------------------------------------------------
+  addMessage("system","Welcome. Pick a theme on the left or ask a question to begin.");
+  setEnabled(true);
+  bootCharts(); animateCounts();
+  if(window.motionAnimate) bootMotion();
+  else window.addEventListener("motion-ready", bootMotion);
+})();
+</script>
+</body>
+</html>

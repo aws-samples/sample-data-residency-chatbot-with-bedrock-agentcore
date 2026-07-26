@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to deploy.config.json and edit if needed. ALL keys are optional — sensible defaults are derived from your AWS identity. Region is FIXED to ap-south-1 (data residency) and cannot be changed here.",
+  "_comment_account_id": "Optional. Your 12-digit AWS account id. If omitted, it is resolved from your AWS credentials (STS).",
+  "account_id": "",
+  "_comment_data_bucket": "Optional. S3 bucket (in ap-south-1) for the demo CSVs. If omitted, defaults to mnre-chatbot-data-<account_id> and is created for you.",
+  "data_bucket": "",
+  "_comment_data_prefix": "Optional. Key prefix inside the bucket for the demo CSVs. Default: chatbot-load.",
+  "data_prefix": "",
+  "_comment_model_id": "Optional. Bedrock ON_DEMAND bare modelId (must be invocable in-region; apac.*/global.* profiles are blocked by the residency guard). Default: anthropic.claude-3-haiku-20240307-v1:0.",
+  "model_id": ""
+}

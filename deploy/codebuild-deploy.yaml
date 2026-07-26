@@ -1,0 +1,401 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  One-click launcher for the MNRE PM Surya Ghar data-residency chatbot.
+  Creates an AWS CodeBuild project that downloads the source bundle
+  (mnre-chatbot.zip) from your S3 bucket and runs deploy.py (which builds the
+  Agent_Lambda container image and provisions the whole stack: VPC, Aurora,
+  Lambdas, AgentCore Gateway/Memory, API, Amplify UI). A custom resource starts
+  the build automatically on stack CREATE. Region is fixed to ap-south-1
+  (Mumbai) for data residency — launch this stack in ap-south-1.
+
+Parameters:
+  SourceBucket:
+    Type: String
+    Description: >
+      S3 bucket (in ap-south-1, in THIS account) that holds the mnre-chatbot.zip
+      source bundle. Upload it first, e.g.:
+      aws s3 cp mnre-chatbot.zip s3://<bucket>/mnre-chatbot.zip --region ap-south-1
+  SourceKey:
+    Type: String
+    Default: mnre-chatbot.zip
+    Description: S3 object key of the source bundle within SourceBucket.
+  WithWebsocket:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Also provision the production WebSocket API (in addition to REST).
+
+Resources:
+
+  # ---------------------------------------------------------------------------
+  # CodeBuild service role. deploy.py provisions the full stack, so this role
+  # needs create/delete permissions across several services. Everything with a
+  # predictable ARN is scoped to this project's "mnre-chatbot-*" naming prefix.
+  # Actions that do not support resource-level scoping (or whose resource ids
+  # are generated at create time) live in their own statements, constrained to
+  # this region via aws:RequestedRegion, with per-statement comments.
+  # ---------------------------------------------------------------------------
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "mnre-chatbot-deploy-codebuild-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: mnre-chatbot-deploy-permissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/mnre-chatbot-*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/mnre-chatbot-*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/mnre-chatbot-*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/mnre-chatbot-*:*"
+              - Sid: ReadSourceBundle
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:aws:s3:::${SourceBucket}/${SourceKey}"
+              - Sid: ProjectS3
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:PutBucketTagging
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketPublicAccessBlock
+                Resource:
+                  - "arn:aws:s3:::mnre-chatbot-*"
+                  - "arn:aws:s3:::mnre-chatbot-*/*"
+              - Sid: ProjectSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:TagResource
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:mnre-chatbot-*"
+              - Sid: ProjectDynamoDB
+                Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTimeToLive
+                  - dynamodb:DescribeTimeToLive
+                  - dynamodb:TagResource
+                  - dynamodb:Scan
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/mnre-chatbot-*"
+              - Sid: ProjectLambda
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:InvokeFunction
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:mnre-chatbot-*"
+              - Sid: ProjectEcr
+                Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:TagResource
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                  - ecr:BatchDeleteImage
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/mnre-chatbot-*"
+              - Sid: EcrAuthToken
+                # GetAuthorizationToken does not support resource-level scoping;
+                # constrained to this region instead.
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Sid: ProjectRds
+                Effect: Allow
+                Action:
+                  - rds:CreateDBCluster
+                  - rds:DeleteDBCluster
+                  - rds:DescribeDBClusters
+                  - rds:CreateDBInstance
+                  - rds:DeleteDBInstance
+                  - rds:DescribeDBInstances
+                  - rds:CreateDBSubnetGroup
+                  - rds:DeleteDBSubnetGroup
+                  - rds:DescribeDBSubnetGroups
+                  - rds:AddTagsToResource
+                Resource:
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:mnre-chatbot-*"
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:mnre-chatbot-*"
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:subgrp:mnre-chatbot-*"
+              - Sid: ReadOnlyDescribes
+                # Read-only discovery calls used for idempotency checks; these
+                # EC2/RDS/STS describe actions do not support resource-level
+                # scoping. Constrained to this region.
+                Effect: Allow
+                Action:
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeRouteTables
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcEndpoints
+                  - rds:DescribeDBEngineVersions
+                  - bedrock:ListFoundationModels
+                  - sts:GetCallerIdentity
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Sid: CreateTimeIdResources
+                # These services generate resource ids at create time (VPC/
+                # subnets/SGs/VPC endpoints, API Gateway apis, Amplify apps,
+                # AgentCore gateways/memory), so their ARNs cannot be known in
+                # advance and resource-level scoping is not practical here.
+                # Mutations are limited to the explicit actions below and
+                # constrained to this region. Scope further per your governance
+                # if needed.
+                Effect: Allow
+                Action:
+                  - ec2:CreateVpc
+                  - ec2:DeleteVpc
+                  - ec2:ModifyVpcAttribute
+                  - ec2:CreateSubnet
+                  - ec2:DeleteSubnet
+                  - ec2:CreateRouteTable
+                  - ec2:DeleteRouteTable
+                  - ec2:AssociateRouteTable
+                  - ec2:DisassociateRouteTable
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:CreateVpcEndpoint
+                  - ec2:DeleteVpcEndpoints
+                  - ec2:ModifyVpcEndpoint
+                  - ec2:ModifySubnetAttribute
+                  - ec2:CreateTags
+                  - apigateway:GET
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - apigateway:PATCH
+                  - apigateway:DELETE
+                  - amplify:CreateApp
+                  - amplify:DeleteApp
+                  - amplify:GetApp
+                  - amplify:ListApps
+                  - amplify:CreateBranch
+                  - amplify:GetBranch
+                  - amplify:CreateDeployment
+                  - amplify:StartDeployment
+                  - amplify:GetJob
+                  - bedrock:InvokeModel
+                  - bedrock-agentcore:CreateGateway
+                  - bedrock-agentcore:GetGateway
+                  - bedrock-agentcore:ListGateways
+                  - bedrock-agentcore:DeleteGateway
+                  - bedrock-agentcore:CreateGatewayTarget
+                  - bedrock-agentcore:GetGatewayTarget
+                  - bedrock-agentcore:ListGatewayTargets
+                  - bedrock-agentcore:DeleteGatewayTarget
+                  - bedrock-agentcore:CreateMemory
+                  - bedrock-agentcore:GetMemory
+                  - bedrock-agentcore:ListMemories
+                  - bedrock-agentcore:DeleteMemory
+                  - bedrock-agentcore:CreateWorkloadIdentity
+                  - bedrock-agentcore:GetWorkloadIdentity
+                  - bedrock-agentcore:DeleteWorkloadIdentity
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Sid: IamForDeploy
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:TagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListAttachedRolePolicies
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/mnre-chatbot-*"
+              - Sid: PassProjectRolesOnly
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/mnre-chatbot-*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - lambda.amazonaws.com
+                      - rds.amazonaws.com
+                      - bedrock-agentcore.amazonaws.com
+
+  # ---------------------------------------------------------------------------
+  # CodeBuild project — Docker-enabled (privilegedMode) so it can build the
+  # Agent_Lambda container image. Inline buildspec runs the repo's runner.
+  # ---------------------------------------------------------------------------
+  DeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "mnre-chatbot-deploy-${AWS::AccountId}"
+      Description: Builds + deploys the MNRE chatbot into this account (ap-south-1).
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      TimeoutInMinutes: 60
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        PrivilegedMode: true          # required to build container images
+        EnvironmentVariables:
+          - Name: ACTION
+            Value: deploy
+          - Name: WITH_WEBSOCKET
+            Value: !Ref WithWebsocket
+          - Name: TARGET_ACCOUNT
+            Value: !Ref AWS::AccountId
+          - Name: AWS_DEFAULT_REGION
+            Value: ap-south-1
+      Source:
+        # The customer uploads mnre-chatbot.zip to their S3 bucket; CodeBuild
+        # downloads + unpacks it at the build root (no git, no credentials).
+        Type: S3
+        Location: !Sub "${SourceBucket}/${SourceKey}"
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - echo "Running deploy from the unpacked S3 source bundle"
+                - bash deploy/run_in_codebuild.sh
+
+  # ---------------------------------------------------------------------------
+  # Custom resource that starts the build on stack CREATE (so the customer does
+  # not have to open CodeBuild and click "Start build").
+  # ---------------------------------------------------------------------------
+  StartBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "mnre-chatbot-startbuild-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: start-codebuild
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                Resource: !GetAtt DeployProject.Arn
+
+  StartBuildFunction:
+    Type: AWS::Lambda::Function
+    Metadata:
+      checkov:
+        skip:
+          - id: CKV_AWS_116
+            comment: >-
+              CloudFormation custom-resource trigger; failures are reported to
+              the stack via cfnresponse, a DLQ adds no value here.
+          - id: CKV_AWS_117
+            comment: >-
+              Calls only the CodeBuild control plane; no VPC resources are
+              involved (the launcher stack creates the VPC later).
+    Properties:
+      FunctionName: !Sub "mnre-chatbot-startbuild-${AWS::AccountId}"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      ReservedConcurrentExecutions: 1
+      Role: !GetAtt StartBuildRole.Arn
+      Code:
+        ZipFile: |
+          import boto3, cfnresponse
+
+          def handler(event, context):
+              try:
+                  if event["RequestType"] in ("Create", "Update"):
+                      project = event["ResourceProperties"]["ProjectName"]
+                      boto3.client("codebuild").start_build(projectName=project)
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                   {"Message": "build started"})
+              except Exception as exc:  # noqa: BLE001
+                  # Do not fail the stack if the trigger errors — the build can
+                  # still be started manually from the CodeBuild console.
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                   {"Message": f"trigger error: {exc}"})
+
+  StartBuild:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt StartBuildFunction.Arn
+      ProjectName: !Ref DeployProject
+
+Outputs:
+  CodeBuildProject:
+    Description: The CodeBuild project running the deployment.
+    Value: !Ref DeployProject
+  BuildLogsHint:
+    Description: Where to watch progress.
+    Value: !Sub "CodeBuild console → build history for mnre-chatbot-deploy-${AWS::AccountId} (region ap-south-1). The Amplify URL is printed at the end of the build log."
+  CleanupHint:
+    Description: How to tear everything down.
+    Value: !Sub "aws codebuild start-build --project-name mnre-chatbot-deploy-${AWS::AccountId} --environment-variables-override name=ACTION,value=cleanup,type=PLAINTEXT --region ap-south-1"

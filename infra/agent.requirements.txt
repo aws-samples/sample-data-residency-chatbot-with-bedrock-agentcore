@@ -1,0 +1,9 @@
+# Agent_Lambda runtime dependencies (Task 14.4) — pinned to the versions used
+# during development. ONLY what the agent needs at runtime: the Strands agent
+# loop, the MCP streamable-HTTP client, SigV4 signing (botocore, via boto3), and
+# httpx. NOT psycopg/cdk/hypothesis/pytest (the agent never touches the DB).
+boto3==1.43.36
+botocore==1.43.36
+strands-agents==1.44.0
+mcp==1.28.0
+httpx==0.28.1
