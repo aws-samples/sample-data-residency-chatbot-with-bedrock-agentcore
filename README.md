@@ -14,15 +14,15 @@ Everything sits inside `ap-south-1` (Mumbai). The only thing outside India is th
 
 Two options — both deploy the full stack to `ap-south-1` and end with a live Amplify URL:
 
-Option A — one-click CloudFormation (recommended). Upload the `mnre-chatbot.zip` bundle to an S3 bucket in your account, then launch `deploy/codebuild-deploy.yaml` in `ap-south-1`; a CodeBuild job pulls the bundle, builds the image, and provisions everything. No git access or local tools needed.
+Option A — one-click CloudFormation (recommended). Upload the `chatbot.zip` bundle to an S3 bucket in your account, then launch `deploy/codebuild-deploy.yaml` in `ap-south-1`; a CodeBuild job pulls the bundle, builds the image, and provisions everything. No git access or local tools needed.
 
 ```bash
-aws s3 cp mnre-chatbot.zip s3://<your-bucket>/mnre-chatbot.zip --region ap-south-1
+aws s3 cp chatbot.zip s3://<your-bucket>/chatbot.zip --region ap-south-1
 aws cloudformation create-stack --region ap-south-1 \
-  --stack-name mnre-chatbot-launcher \
+  --stack-name chatbot-launcher \
   --template-body file://deploy/codebuild-deploy.yaml \
   --parameters ParameterKey=SourceBucket,ParameterValue=<your-bucket> \
-               ParameterKey=SourceKey,ParameterValue=mnre-chatbot.zip \
+               ParameterKey=SourceKey,ParameterValue=chatbot.zip \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
@@ -78,7 +78,7 @@ A user types a plain-English question in a browser; the system answers it from t
 
 > The LLM is the reasoning brain, but it never sees the database. It can only ask pre-approved, read-only questions through a guarded gateway. So you get natural-language flexibility with database-grade safety.
 
-## The three messages that matter to MNRE
+## The three messages that matter
 
 - **Data residency** — Every box (database, AI inference, APIs, hosting) is in Mumbai (`ap-south-1`). The AI model is invoked in-region on-demand, never a cross-border profile. The only thing outside India is the user's browser, and it only ever receives the final answer text — never raw data. No CloudFront (a global service) anywhere.
 - **Security** — The database is private (no public access). The agent can't run arbitrary SQL — it can only call 4 read-only tools through an authenticated gateway, and every query is built from a validated whitelist, so SQL injection and writes are impossible. Credentials live in Secrets Manager, never in code or logs.
