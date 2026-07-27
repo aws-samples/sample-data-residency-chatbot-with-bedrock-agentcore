@@ -1,4 +1,4 @@
-Data-residency chatbot with Amazon Bedrock AgentCore
+### Data-residency chatbot with Amazon Bedrock AgentCore
 
 Data-residency-compliant natural-language chatbot. Ask plain-English questions and get answers computed from the program data held in Aurora PostgreSQL — without writing SQL, and without any data or inference leaving India (`ap-south-1`, Mumbai).
 
