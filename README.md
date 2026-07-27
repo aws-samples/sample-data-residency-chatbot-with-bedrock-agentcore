@@ -1,6 +1,6 @@
 # Sample: Data-residency chatbot with Amazon Bedrock AgentCore
 
-Data-residency-compliant natural-language chatbot for the MNRE PM Surya Ghar rooftop-solar program. Ask plain-English questions and get answers computed from the program data held in Aurora PostgreSQL — without writing SQL, and without any data or inference leaving India (`ap-south-1`, Mumbai).
+Data-residency-compliant natural-language chatbot. Ask plain-English questions and get answers computed from the program data held in Aurora PostgreSQL — without writing SQL, and without any data or inference leaving India (`ap-south-1`, Mumbai).
 
 ## Architecture
 
@@ -38,7 +38,7 @@ Prerequisite for both: enable Bedrock model access for Claude 3 Haiku in the tar
 
 ### End-to-end steps (numbered to match the diagram)
 
-1. **Load UI** — the MNRE executive opens the dashboard over HTTPS; AWS Amplify serves the static page (charts + chat box).
+1. **Load UI** — the Executive opens the dashboard over HTTPS; AWS Amplify serves the static page (charts + chat box).
 2. **Ask** — the browser `fetch()`-POSTs the plain-English question to the API Gateway endpoint (`POST /chat`).
 3. **Route** — API Gateway invokes the Agent_Lambda (AWS_PROXY) — the Strands agent that reasons over the question.
 4. **Reason** — the agent calls Amazon Bedrock (in-region ON_DEMAND) over the Converse tool-use loop; the model decides *which* tool to call and with what parameters.
