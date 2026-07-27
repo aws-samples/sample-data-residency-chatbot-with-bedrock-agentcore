@@ -1,10 +1,10 @@
-# Sample: Data-residency chatbot with Amazon Bedrock AgentCore
+<img width="1074" height="586" alt="NLP-BOT" src="https://github.com/user-attachments/assets/bab865dd-659e-4c7a-a078-9ff35bffc92b" /># Sample: Data-residency chatbot with Amazon Bedrock AgentCore
 
 Data-residency-compliant natural-language chatbot. Ask plain-English questions and get answers computed from the program data held in Aurora PostgreSQL — without writing SQL, and without any data or inference leaving India (`ap-south-1`, Mumbai).
 
 ## Architecture
 
-![PM Surya Ghar — MNRE Data-Residency Chatbot · AWS architecture (ap-south-1, Mumbai)](docs/architecture.png)
+<img width="1074" height="586" alt="NLP-BOT" src="https://github.com/user-attachments/assets/fa148c5b-2e85-4935-8772-7b0a0e1af52c" />
 
 Everything sits inside `ap-south-1` (Mumbai). The only thing outside India is the user's browser, and it only ever receives the final natural-language answer — never raw program data. No CloudFront anywhere; Bedrock is invoked in-region with a bare ON_DEMAND `modelId`.
 
