@@ -1,4 +1,4 @@
-# MNRE AgentCore Chatbot — Architecture
+# Data-residency chatbot with Amazon Bedrock AgentCore — Architecture
 
 How the chatbot works internally. Every component runs in `ap-south-1` (Mumbai);
 the only component outside the Region is the user's browser, and it only ever

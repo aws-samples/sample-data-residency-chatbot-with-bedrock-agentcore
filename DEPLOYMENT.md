@@ -1,4 +1,4 @@
-# Deployment — MNRE AgentCore Chatbot
+# Deployment — Data-residency chatbot with Amazon Bedrock AgentCore
 
 Deploy the full chatbot into your own AWS account. Everything deploys to
 `ap-south-1` (Mumbai) — the region is fixed for data residency and is not
