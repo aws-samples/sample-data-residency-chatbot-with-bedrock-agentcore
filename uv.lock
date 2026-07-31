@@ -338,7 +338,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mnre-agentcore-chatbot"
+name = "residency-agentcore-chatbot"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

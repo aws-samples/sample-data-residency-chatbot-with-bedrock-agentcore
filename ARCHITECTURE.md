@@ -6,7 +6,7 @@ receives the final natural-language answer — never raw program data.
 
 ## System overview
 
-![PM Surya Ghar — MNRE NLP Chatbot Architecture (ap-south-1)](docs/architecture.png)
+![Data-residency chatbot architecture (ap-south-1)](docs/architecture.png)
 
 ```
 Browser (Amplify static UI)
@@ -38,7 +38,7 @@ Both are regional `ap-south-1` endpoints — no CloudFront (a global service) an
 |-----------|------|-----------------|---------|
 | Browser UI | `ui/index.html` | static HTML/JS (Amplify) | Dashboard + chat box; POSTs questions, renders answers |
 | Agent_Lambda | `src/agent/handler.py` | container image, out-of-VPC | Strands agent: interprets question, calls tools, phrases answer |
-| Bedrock model | (invoked by agent) | `mistral.mistral-large-3-675b-instruct` ON_DEMAND (default; configurable) | Reasoning + tool selection + answer phrasing |
+| Bedrock model | (invoked by agent) | configured `model_id` — any bare in-region ON_DEMAND modelId with Converse tool-use support | Reasoning + tool selection + answer phrasing |
 | AgentCore Gateway | `infra/agentcore_setup.py` | MCP server, AWS_IAM auth | Exposes 4 read-only `query_<table>` tools to the agent |
 | Tool_Lambda | `src/tool/handler.py` | zip, in-VPC | The only DB client: validate → build safe SQL → execute |
 | Aurora PostgreSQL | `infra/provision_aurora.py` | Serverless v2, private | Holds the 4 curated tables |
@@ -159,7 +159,7 @@ Two guarantees this flow gives you:
 
 ## Data schema (curated, shared by all 4 tables)
 
-The four source datasets are lifecycle snapshots of the same PM Surya Ghar
+The four source datasets are lifecycle snapshots of the same subsidy-application
 record, so one curated schema (`src/common/schema.py`) applies to all four:
 `applications`, `subsidy`, `installation`, `inspection`. 30 columns spanning
 identifiers, geography, classification, vendor, bank, status/stage, monetary
@@ -210,7 +210,7 @@ constraints, not despite them.
 ├── deploy/
 │   ├── codebuild-deploy.yaml  # one-click CloudFormation launcher (CodeBuild runs deploy.py from an S3 bundle)
 │   ├── run_in_codebuild.sh    # CodeBuild entry point (runs deploy.py/cleanup.py from the unpacked bundle)
-│   └── make_bundle.sh         # produces the clean mnre-chatbot.zip source bundle for handoff
+│   └── make_bundle.sh         # produces the clean residency-chatbot.zip source bundle for handoff
 ├── deploy.config.example.json # partner config template (copy to deploy.config.json)
 ├── data/                      # synthetic sample CSVs (committed, no real PII)
 ├── src/

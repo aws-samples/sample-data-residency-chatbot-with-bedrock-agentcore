@@ -227,7 +227,7 @@ def _clear_ids_state() -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Destroy the MNRE chatbot stack")
+    ap = argparse.ArgumentParser(description="Destroy the chatbot stack")
     ap.add_argument("--account", default=None,
                     help="target AWS account id (skips the interactive prompt)")
     ap.add_argument("--yes", action="store_true", help="skip the confirmation prompt")

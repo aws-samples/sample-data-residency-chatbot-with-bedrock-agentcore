@@ -1,4 +1,4 @@
-"""Read-only Tool_Lambda handler for the MNRE chatbot (Task 10.1, ap-south-1).
+"""Read-only Tool_Lambda handler for the chatbot (Task 10.1, ap-south-1).
 
 Runs IN the default VPC's private subnets so it can reach the private Aurora
 cluster directly over 5432 (TLS) and read the READ-ONLY DB credential via the

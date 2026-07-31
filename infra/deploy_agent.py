@@ -16,12 +16,12 @@ private Aurora DB, so it needs NO VPC attachment and NO NAT gateway.
 End-to-end, idempotent:
   1. Build the image with finch (``--platform linux/amd64`` for the Lambda
      runtime) from the repo root using ``infra/agent.Dockerfile``.
-  2. Create/reuse the ECR repo ``mnre-chatbot-agent``; docker-login finch to
+  2. Create/reuse the ECR repo ``residency-chatbot-agent``; docker-login finch to
      ECR; tag + push the image (digest captured).
   3. Ensure the Agent_Lambda IAM role has AgentCore observability permissions
      (CloudWatch Logs is already present via AWSLambdaBasicExecutionRole; this
      adds X-Ray trace + CloudWatch EMF metric publishing for AgentCore traces).
-  4. Create/update the ``mnre-chatbot-agent`` Lambda as ``PackageType=Image``,
+  4. Create/update the ``residency-chatbot-agent`` Lambda as ``PackageType=Image``,
      role = agent_lambda_role_arn, NO VpcConfig, env wired from network_ids.json
      (GATEWAY_URL, MEMORY_ID, MODEL_ID, REGION, ACTOR_ID), Timeout=120s,
      MemorySize=1024MB, TracingConfig=Active (observability).
@@ -64,7 +64,7 @@ MEMORY_MB = 1024
 
 # AgentCore observability: X-Ray trace publishing + CloudWatch EMF metrics.
 # (CloudWatch Logs themselves come from the attached AWSLambdaBasicExecutionRole.)
-OBSERVABILITY_POLICY_NAME = "mnre-agent-observability"
+OBSERVABILITY_POLICY_NAME = "agent-observability"
 
 lam = boto3.client("lambda", region_name=REGION)
 ecr = boto3.client("ecr", region_name=REGION)
@@ -182,7 +182,7 @@ def ensure_observability_policy(role_arn: str) -> None:
                 "Resource": "*",
                 "Condition": {
                     "StringEquals": {
-                        "cloudwatch:namespace": ["bedrock-agentcore", "MNRE/Chatbot"]
+                        "cloudwatch:namespace": ["bedrock-agentcore", "ResidencyChatbot"]
                     }
                 },
             },
@@ -204,7 +204,7 @@ def _env(ids: dict) -> dict:
             "MODEL_ID": ids.get("model_id", MODEL_ID),
             "GATEWAY_URL": ids["gateway_url"],
             "MEMORY_ID": ids["memory_id"],
-            "ACTOR_ID": "mnre-demo-user",
+            "ACTOR_ID": "demo-user",
             # @connections callback endpoint of the PRODUCTION WebSocket API so the
             # handler can POST the answer back to the originating connection. Empty
             # for the REST demo path; set later by provision_websocket.py.

@@ -68,7 +68,7 @@ def _build_inline_handler(source: str, fake_ddb: MagicMock):
     import importlib.util
     import tempfile
 
-    env = {"CONNECTIONS_TABLE": "mnre-chatbot-connections", "REGION": "ap-south-1"}
+    env = {"CONNECTIONS_TABLE": "residency-chatbot-connections", "REGION": "ap-south-1"}
     with tempfile.NamedTemporaryFile(
         "w", suffix=".py", prefix="inline_ws_handler_", delete=False
     ) as tf:
@@ -99,7 +99,7 @@ def test_connect_stores_connection_id():
     assert resp["statusCode"] == 200
     fake_ddb.put_item.assert_called_once()
     kwargs = fake_ddb.put_item.call_args.kwargs
-    assert kwargs["TableName"] == "mnre-chatbot-connections"
+    assert kwargs["TableName"] == "residency-chatbot-connections"
     item = kwargs["Item"]
     # The originating connectionId is the stored key (and the session id).
     assert item["connectionId"] == {"S": "conn-abc-123"}
@@ -133,7 +133,7 @@ def test_disconnect_removes_connection_id():
     assert resp["statusCode"] == 200
     fake_ddb.delete_item.assert_called_once()
     kwargs = fake_ddb.delete_item.call_args.kwargs
-    assert kwargs["TableName"] == "mnre-chatbot-connections"
+    assert kwargs["TableName"] == "residency-chatbot-connections"
     assert kwargs["Key"] == {"connectionId": {"S": "conn-abc-123"}}
 
 

@@ -1,6 +1,6 @@
-"""System prompt builder for the MNRE Agent_Lambda (Task 14.3, Req 7.3-7.5, 14.4).
+"""System prompt builder for the Agent_Lambda (Task 14.3, Req 7.3-7.5, 14.4).
 
-Describes the 4 curated MNRE tables and their columns (pulled from the single
+Describes the 4 curated tables and their columns (pulled from the single
 source of truth ``common.schema``) and instructs the model to:
   - pick the matching ``query_<table>`` Gateway tool,
   - set ``table`` to the tool's fixed table name,
@@ -46,7 +46,7 @@ def build_system_prompt() -> str:
     """Return a SHORT, imperative system prompt.
 
     IMPORTANT (defect-3 finding): do NOT spell out the tool's JSON input format
-    (filters/group_by/aggregations shapes) in the prompt. Mistral Large echoes
+    (filters/group_by/aggregations shapes) in the prompt. Some models echo
     that format back as text instead of issuing a real toolUse. The tool's
     input schema is already supplied to the model by the agent framework, so the
     prompt only needs to (a) help pick the right table and (b) command an actual
@@ -58,8 +58,8 @@ def build_system_prompt() -> str:
         for t in TABLES
     )
 
-    return f"""You are the MNRE PM Surya Ghar data assistant. Answer plain-English \
-questions about India's rooftop-solar subsidy program using ONLY these four \
+    return f"""You are the rooftop-solar program data assistant. Answer plain-English \
+questions about the rooftop-solar subsidy program using ONLY these four \
 tables, each reached through its own query tool:
 {tools}
 

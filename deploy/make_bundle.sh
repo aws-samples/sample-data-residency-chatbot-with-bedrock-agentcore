@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Produce the clean source bundle (mnre-chatbot.zip) to hand to a customer.
+# Produce the clean source bundle (residency-chatbot.zip) to hand to a customer.
 #
 # The zip contains the project at its ROOT (deploy.py, infra/, src/, ui/, data/,
 # deploy/, docs, etc.) and EXCLUDES runtime state, secrets, virtualenvs, build
@@ -11,8 +11,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="${1:-${ROOT}/mnre-chatbot.zip}"
-STAGE="$(mktemp -d)/mnre-chatbot"
+OUT="${1:-${ROOT}/residency-chatbot.zip}"
+STAGE="$(mktemp -d)/residency-chatbot"
 
 echo "[bundle] staging clean copy at ${STAGE}"
 mkdir -p "${STAGE}"
@@ -49,5 +49,5 @@ rm -f "${OUT}"
 echo "[bundle] done: ${OUT}"
 echo
 echo "Next steps for the customer:"
-echo "  aws s3 cp ${OUT##*/} s3://<their-bucket>/mnre-chatbot.zip --region ap-south-1"
-echo "  Launch deploy/codebuild-deploy.yaml with SourceBucket=<their-bucket> SourceKey=mnre-chatbot.zip"
+echo "  aws s3 cp ${OUT##*/} s3://<their-bucket>/residency-chatbot.zip --region ap-south-1"
+echo "  Launch deploy/codebuild-deploy.yaml with SourceBucket=<their-bucket> SourceKey=residency-chatbot.zip"

@@ -6,7 +6,7 @@ End-to-end, idempotent:
        common/  (schema.py, __init__.py)
      plus psycopg2 (manylinux2014_x86_64, cp312 wheel) at the zip root — exactly
      the packaging approach used by the loader Lambda (deploy_loader.py).
-  2. Create/update the ``mnre-chatbot-tool`` Lambda in the 2 private subnets +
+  2. Create/update the ``residency-chatbot-tool`` Lambda in the 2 private subnets +
      lambda-sg, role = tool_lambda_role_arn, handler ``tool.handler.handler``,
      timeout 30s / memory 512MB; env DB_ENDPOINT/DB_NAME/DB_PORT/READONLY_SECRET_ARN.
   3. Run a few integration invocations against the LOADED (partial) data and an

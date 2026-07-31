@@ -1,4 +1,4 @@
-"""Provision Aurora PostgreSQL Serverless v2 (private) for the MNRE chatbot
+"""Provision Aurora PostgreSQL Serverless v2 (private) for the chatbot
 (ap-south-1). The Secrets Manager interface endpoint is created by
 provision_network.py; this script creates the database tier.
 
@@ -25,8 +25,8 @@ from config import PROJECT, REGION, TAGS, load_ids, save_ids  # noqa: E402
 
 CLUSTER_ID = f"{PROJECT}-aurora"
 INSTANCE_ID = f"{PROJECT}-aurora-1"
-DB_NAME = "mnre"
-MASTER_USER = "mnre_admin"
+DB_NAME = "chatbot"
+MASTER_USER = "chatbot_admin"
 SUBNET_GROUP = f"{PROJECT}-db-subnet-group"
 
 rds = boto3.client("rds", region_name=REGION)
@@ -39,7 +39,7 @@ def ensure_subnet_group(ids):
     except rds.exceptions.DBSubnetGroupNotFoundFault:
         rds.create_db_subnet_group(
             DBSubnetGroupName=SUBNET_GROUP,
-            DBSubnetGroupDescription="MNRE chatbot private subnets",
+            DBSubnetGroupDescription="chatbot private subnets",
             SubnetIds=ids["private_subnet_ids"],
             Tags=TAGS,
         )

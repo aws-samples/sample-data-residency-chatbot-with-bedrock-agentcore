@@ -2,14 +2,14 @@
 (Task 8, ap-south-1).
 
 What it does (idempotent end-to-end):
-  1. Ensures the read-only DB secret ``mnre-chatbot-db-readonly`` exists in
+  1. Ensures the read-only DB secret ``residency-chatbot-db-readonly`` exists in
      Secrets Manager (created here, by the deploy identity, because the
-     tool-lambda role can READ ``mnre-chatbot-*`` but not CREATE secrets). The
-     secret holds {host, port, dbname, username=mnre_readonly, password} with a
+     tool-lambda role can READ ``residency-chatbot-*`` but not CREATE secrets). The
+     secret holds {host, port, dbname, username=chatbot_readonly, password} with a
      generated password.
   2. Builds a deployment zip containing handler.py + the bundled schema.py +
      psycopg2 (manylinux x86_64 wheel for the Lambda runtime).
-  3. Creates or updates the ``mnre-chatbot-db-bootstrap`` Lambda, attached to the
+  3. Creates or updates the ``residency-chatbot-db-bootstrap`` Lambda, attached to the
      2 private subnets + lambda-sg, reusing the existing tool-lambda role,
      timeout 120s / memory 512MB, with DB_* env vars.
   4. Invokes it synchronously and prints the returned summary.
@@ -43,7 +43,7 @@ ZIP_PATH = os.path.join(HERE, "_bootstrap_db.zip")
 
 FUNCTION_NAME = f"{PROJECT}-db-bootstrap"
 READONLY_SECRET_NAME = f"{PROJECT}-db-readonly"
-READONLY_USER = "mnre_readonly"
+READONLY_USER = "chatbot_readonly"
 RUNTIME = "python3.12"
 PSYCOPG_PKG = "psycopg2-binary==2.9.9"
 
@@ -77,7 +77,7 @@ def ensure_readonly_secret(ids: dict) -> str:
     except sm.exceptions.ResourceNotFoundException:
         resp = sm.create_secret(
             Name=READONLY_SECRET_NAME,
-            Description="MNRE chatbot read-only DB user (mnre_readonly) credentials",
+            Description="chatbot read-only DB user (chatbot_readonly) credentials",
             SecretString=json.dumps(payload),
             Tags=TAGS,
         )

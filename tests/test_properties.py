@@ -1,4 +1,4 @@
-"""Property-based tests for the MNRE AgentCore Chatbot pure-logic layers."""
+"""Property-based tests for the data-residency AgentCore chatbot pure-logic layers."""
 
 import pytest
 from hypothesis import given, settings
@@ -9,7 +9,7 @@ from agent.residency import residency_guard
 _CROSS_REGION_PREFIXES = ("us.", "eu.", "ap.", "apac.", "jp.", "au.", "global.")
 
 
-# Feature: mnre-agentcore-chatbot, Property 1: Residency model-id guard
+# Feature: residency-agentcore-chatbot, Property 1: Residency model-id guard
 @settings(max_examples=200)
 @given(
     suffix=st.text(),
@@ -65,7 +65,7 @@ def _valid_value_for(kind, draw):
     return raw, (raw.strip().lower() == "yes")
 
 
-# Feature: mnre-agentcore-chatbot, Property 6: Type coercion casts valid values and nulls the rest
+# Feature: residency-agentcore-chatbot, Property 6: Type coercion casts valid values and nulls the rest
 @settings(max_examples=200)
 @given(data=st.data(), kind=st.sampled_from(_KINDS))
 def test_property_6_type_coercion(data, kind):
@@ -98,7 +98,7 @@ def test_property_6_type_coercion(data, kind):
         assert result == junk.strip() or result is None
 
 
-# Feature: mnre-agentcore-chatbot, Property 7: Load projects exactly the curated columns
+# Feature: residency-agentcore-chatbot, Property 7: Load projects exactly the curated columns
 @settings(max_examples=200)
 @given(
     extra=st.dictionaries(
@@ -129,7 +129,7 @@ def test_property_7_projection_curated_columns(extra, present):
         assert projected[col] == f"val-{col}"
 
 
-# Feature: mnre-agentcore-chatbot, Property 8: Loader is resilient to bad values
+# Feature: residency-agentcore-chatbot, Property 8: Loader is resilient to bad values
 @settings(max_examples=200)
 @given(
     rows=st.lists(
@@ -266,7 +266,7 @@ def _all_literal_values(req):
     return values
 
 
-# Feature: mnre-agentcore-chatbot, Property 2: Valid requests build safe, parameterized, whitelist-only SQL
+# Feature: residency-agentcore-chatbot, Property 2: Valid requests build safe, parameterized, whitelist-only SQL
 @settings(max_examples=200)
 @given(req=_valid_request())
 def test_property_2_safe_parameterized_sql(req):
@@ -331,7 +331,7 @@ def _out_of_contract_request(draw):
     return {"table": "subsidy", "aggregations": [{"fn": fn, "column": col}]}, kind
 
 
-# Feature: mnre-agentcore-chatbot, Property 3: Out-of-contract requests are rejected with no execution
+# Feature: residency-agentcore-chatbot, Property 3: Out-of-contract requests are rejected with no execution
 @settings(max_examples=200)
 @given(case=_out_of_contract_request())
 def test_property_3_out_of_contract_rejected(case):
@@ -344,7 +344,7 @@ def test_property_3_out_of_contract_rejected(case):
     assert isinstance(result["error"], str) and result["error"]
 
 
-# Feature: mnre-agentcore-chatbot, Property 4: Row limit is always clamped to range
+# Feature: residency-agentcore-chatbot, Property 4: Row limit is always clamped to range
 @settings(max_examples=200)
 @given(
     n=st.one_of(
@@ -372,7 +372,7 @@ def test_property_4_limit_clamped(n):
             assert eff == n
 
 
-# Feature: mnre-agentcore-chatbot, Property 5: Successful responses conform to the response schema
+# Feature: residency-agentcore-chatbot, Property 5: Successful responses conform to the response schema
 @settings(max_examples=200)
 @given(
     table=st.sampled_from(list(TABLES)),
@@ -410,7 +410,7 @@ _SECRET_TEXT = st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789",
                        min_size=1, max_size=24)
 
 
-# Feature: mnre-agentcore-chatbot, Property 11: Logs never contain secret values
+# Feature: residency-agentcore-chatbot, Property 11: Logs never contain secret values
 @settings(max_examples=200)
 @given(
     username=_SECRET_TEXT,
@@ -485,7 +485,7 @@ class _FakeMemoryClient:
 _TURN_TEXT = st.text(max_size=60)
 
 
-# Feature: mnre-agentcore-chatbot, Property 10: Session memory round-trip preserves turns
+# Feature: residency-agentcore-chatbot, Property 10: Session memory round-trip preserves turns
 @settings(max_examples=100)
 @given(
     turns=st.lists(st.tuples(_TURN_TEXT, _TURN_TEXT), max_size=12),
@@ -499,7 +499,7 @@ def test_property_10_memory_round_trip(turns, session_id):
     same turns in the order saved; an empty session returns empty
     (Validates: Requirements 7.7, 8.2, 8.3, 8.4, 8.6)."""
     client = _FakeMemoryClient()
-    memory_id = "mnre_chatbot_memory-abcdefghij"
+    memory_id = "residency_chatbot_memory-abcdefghij"
 
     # Empty session → empty result (Req 8.6).
     assert load(client, memory_id, DEFAULT_ACTOR_ID, session_id) == []
@@ -548,7 +548,7 @@ def _error_inputs():
     )
 
 
-# Feature: mnre-agentcore-chatbot, Property 9: Tool errors produce a graceful answer
+# Feature: residency-agentcore-chatbot, Property 9: Tool errors produce a graceful answer
 @settings(max_examples=200)
 @given(err=_error_inputs())
 def test_property_9_tool_errors_graceful(err):

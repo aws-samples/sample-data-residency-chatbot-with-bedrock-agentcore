@@ -1,8 +1,8 @@
-"""Generate SYNTHETIC, COPY-ready sample CSVs for the four MNRE tables.
+"""Generate SYNTHETIC, COPY-ready sample CSVs for the four curated tables.
 
 WHY this exists
 ---------------
-The real PM Surya Ghar datasets are large and contain beneficiary PII (bank
+Real subsidy-program datasets are large and contain beneficiary PII (bank
 account numbers, PFMS ids, gender, category). They are NOT shipped in this
 repo. Instead this script generates a small, fully synthetic, deterministic
 sample (seeded) with the SAME curated schema, so a partner gets a working demo
@@ -56,7 +56,7 @@ RURAL_URBAN = ["Rural", "Urban"]
 CATEGORIES = ["General", "OBC", "SC", "ST"]
 CONSUMER_CATEGORIES = ["Residential", "Group Housing Society", "Residential Welfare Assoc."]
 GENDERS = ["Male", "Female"]
-SCHEMES = ["PM Surya Ghar"]
+SCHEMES = ["Rooftop Solar Subsidy"]
 VENDORS = [
     ("SunTech Solar Pvt Ltd", "V001"),
     ("GreenVolt Energy", "V002"),
@@ -141,7 +141,7 @@ def _build_records(rows: int, rng: random.Random) -> list[dict]:
 
         records.append({
             "application_id": f"APP{100000 + i}",
-            "application_number": f"PMSG-{2024}-{100000 + i}",
+            "application_number": f"RSS-{2024}-{100000 + i}",
             "state": state,
             "district": district,
             "discom": rng.choice(DISCOMS),
@@ -206,7 +206,7 @@ def _write_table(out_dir: str, table: str, records: list[dict]) -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Generate synthetic MNRE sample CSVs")
+    ap = argparse.ArgumentParser(description="Generate synthetic sample CSVs")
     ap.add_argument("--rows", type=int, default=400, help="rows per table (default 400)")
     ap.add_argument("--out", default=os.path.join(_ROOT, "data"),
                     help="output directory (default: <repo>/data)")

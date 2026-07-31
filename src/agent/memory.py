@@ -1,4 +1,4 @@
-"""AgentCore Memory adapter for the MNRE chatbot (Task 13.2, Req 7.7, 8.2-8.6).
+"""AgentCore Memory adapter for the chatbot (Task 13.2, Req 7.7, 8.2-8.6).
 
 Short-term conversational memory: each chat turn is stored as ONE AgentCore
 ``CreateEvent`` carrying two conversational payload items (a USER message and an
@@ -36,7 +36,7 @@ import re as _re
 
 # Stable demo actor id (Req 8.2). sessionId is the WebSocket connectionId,
 # passed in by the caller.
-DEFAULT_ACTOR_ID = "mnre-demo-user"
+DEFAULT_ACTOR_ID = "demo-user"
 
 _ROLE_USER = "USER"
 _ROLE_ASSISTANT = "ASSISTANT"

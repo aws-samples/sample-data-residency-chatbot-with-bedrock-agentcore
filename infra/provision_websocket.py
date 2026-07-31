@@ -1,4 +1,4 @@
-r"""Provision the API Gateway WebSocket API for the MNRE chatbot (ap-south-1) —
+r"""Provision the API Gateway WebSocket API for the chatbot (ap-south-1) —
 the PRODUCTION transport.
 
 Architecture (design Req 9, 1.5, 1.11)
@@ -137,7 +137,7 @@ def ensure_helper_role(ids: dict) -> str:
         iam.create_role(
             RoleName=WS_HELPER_ROLE,
             AssumeRolePolicyDocument=LAMBDA_TRUST,
-            Description="MNRE chatbot WS connect/disconnect helper Lambdas",
+            Description="chatbot WS connect/disconnect helper Lambdas",
             Tags=TAGS,
         )
         print(f"[create] IAM role: {WS_HELPER_ROLE}")
@@ -150,7 +150,7 @@ def ensure_helper_role(ids: dict) -> str:
     )
     iam.put_role_policy(
         RoleName=WS_HELPER_ROLE,
-        PolicyName="mnre-ws-connections-ddb",
+        PolicyName="ws-connections-ddb",
         PolicyDocument=json.dumps({
             "Version": "2012-10-17",
             "Statement": [{

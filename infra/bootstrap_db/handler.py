@@ -1,4 +1,4 @@
-"""DB bootstrap Lambda for the MNRE chatbot Aurora (ap-south-1, Task 8).
+"""DB bootstrap Lambda for the chatbot Aurora (ap-south-1, Task 8).
 
 Runs IN the default VPC's private subnets so it can reach the private Aurora
 cluster over 5432, and reads its secrets via the Secrets Manager interface VPC
@@ -7,7 +7,7 @@ idempotent) to:
 
   1. CREATE the 4 curated tables + their indexes (DDL imported from the bundled
      copy of ``schema.py`` — the single source of truth, Req 3).
-  2. CREATE a read-only DB role ``mnre_readonly`` with SELECT-only grants
+  2. CREATE a read-only DB role ``chatbot_readonly`` with SELECT-only grants
      (Req 11.5): CONNECT on the db, USAGE on schema public, SELECT on all
      existing tables, and ALTER DEFAULT PRIVILEGES so future tables are also
      SELECT-able. Idempotent (DO block for the role; IF NOT EXISTS for tables).
@@ -16,9 +16,9 @@ idempotent) to:
 
 Credentials:
   - MASTER secret (``MASTER_SECRET_ARN``): the RDS-managed master creds
-    (user ``mnre_admin``) used to connect and run the DDL/grants.
+    (user ``chatbot_admin``) used to connect and run the DDL/grants.
   - READONLY secret (``READONLY_SECRET_NAME``): pre-created by the deploy
-    script; holds the generated password for ``mnre_readonly``. The handler
+    script; holds the generated password for ``chatbot_readonly``. The handler
     reads it and applies that password to the role so the Tool_Lambda can later
     use the same secret to connect.
 
@@ -177,7 +177,7 @@ def handler(event, context):  # noqa: ARG001 - Lambda signature
     db_port = int(os.environ.get("DB_PORT", "5432"))
     master_secret_arn = os.environ["MASTER_SECRET_ARN"]
     readonly_secret_name = os.environ["READONLY_SECRET_NAME"]
-    readonly_user = os.environ.get("READONLY_USER", "mnre_readonly")
+    readonly_user = os.environ.get("READONLY_USER", "chatbot_readonly")
 
     sm = boto3.client("secretsmanager", region_name=REGION)
     master = _get_secret(sm, master_secret_arn)

@@ -19,12 +19,12 @@ prerequisites below.
 
 | Requirement | Notes |
 |-------------|-------|
-| Bedrock model access | Enable the configured model (default `mistral.mistral-large-3-675b-instruct`) in the Bedrock console → Model access (region `ap-south-1`). Without it the first invoke returns `AccessDeniedException`. This is a one-time console toggle no automation can do for you. |
+| Bedrock model access | Pick a bare in-region ON_DEMAND model with Converse tool-use support from the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page and enable it in the Bedrock console → Model access (region `ap-south-1`). Without it the first invoke returns `AccessDeniedException`. This is a one-time console toggle no automation can do for you. |
 | Permissions to launch | Option A: permission to create the CloudFormation stack with `CAPABILITY_NAMED_IAM`. Option B: the [IAM policy](#iam-policy-for-the-deploying-identity) below on your identity. |
 
 ## Option A — One-click CloudFormation (from an S3 source bundle)
 
-You are given a source bundle `mnre-chatbot.zip`. You upload it to an S3 bucket
+You are given a source bundle `residency-chatbot.zip`. You upload it to an S3 bucket
 in your account, then launch the template `deploy/codebuild-deploy.yaml`. It
 creates a CodeBuild project (which has Docker + Python) and auto-starts it;
 CodeBuild downloads the bundle from your S3, runs `deploy.py` — the same engine
@@ -33,7 +33,7 @@ is provisioned. No git access and no local Docker needed.
 
 Step 1 — upload the bundle to your S3 (region ap-south-1):
 ```bash
-aws s3 cp mnre-chatbot.zip s3://<your-bucket>/mnre-chatbot.zip --region ap-south-1
+aws s3 cp residency-chatbot.zip s3://<your-bucket>/residency-chatbot.zip --region ap-south-1
 ```
 
 Step 2 — launch the stack:
@@ -41,35 +41,38 @@ Step 2 — launch the stack:
 Console:
 1. Open CloudFormation in `ap-south-1` → Create stack → With new resources.
 2. Upload `deploy/codebuild-deploy.yaml`.
-3. Set `SourceBucket=<your-bucket>` and `SourceKey=mnre-chatbot.zip`.
+3. Set `SourceBucket=<your-bucket>`, `SourceKey=residency-chatbot.zip`, and
+   `ModelId=<bare-in-region-model-id>` (pick one from the
+   [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page).
    (Optional) set `WithWebsocket=true` to also provision the production WebSocket API.
 4. Acknowledge IAM capability (CAPABILITY_NAMED_IAM) → Create stack.
-5. Watch progress in CodeBuild → build history for `mnre-chatbot-deploy-<account>`.
+5. Watch progress in CodeBuild → build history for `residency-chatbot-deploy-<account>`.
    The Amplify URL is printed at the end of the build log.
 
 CLI:
 ```bash
 aws cloudformation create-stack \
   --region ap-south-1 \
-  --stack-name mnre-chatbot-launcher \
+  --stack-name residency-chatbot-launcher \
   --template-body file://deploy/codebuild-deploy.yaml \
   --parameters ParameterKey=SourceBucket,ParameterValue=<your-bucket> \
-               ParameterKey=SourceKey,ParameterValue=mnre-chatbot.zip \
+               ParameterKey=SourceKey,ParameterValue=residency-chatbot.zip \
+               ParameterKey=ModelId,ParameterValue=<bare-in-region-model-id> \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
 Cleanup (tears down everything the build created):
 ```bash
 aws codebuild start-build \
-  --project-name mnre-chatbot-deploy-<account> \
+  --project-name residency-chatbot-deploy-<account> \
   --environment-variables-override name=ACTION,value=cleanup,type=PLAINTEXT \
   --region ap-south-1
 # then delete the launcher stack:
-aws cloudformation delete-stack --stack-name mnre-chatbot-launcher --region ap-south-1
+aws cloudformation delete-stack --stack-name residency-chatbot-launcher --region ap-south-1
 ```
 
 Producing the bundle (for whoever hands off the code): from the repo root run
-`bash deploy/make_bundle.sh`, which writes a clean `mnre-chatbot.zip` (excludes
+`bash deploy/make_bundle.sh`, which writes a clean `residency-chatbot.zip` (excludes
 runtime state, secrets, venv, and build artifacts).
 
 The rest of this document covers Option B (run `deploy.py` directly).
@@ -90,7 +93,7 @@ also checks identity, the container tool, and model presence automatically.
 
 ```bash
 git clone <this-repo>
-cd mnre-chatbot
+cd residency-chatbot
 uv sync
 
 # Optional: only if you want to override defaults (all keys are optional).
@@ -105,9 +108,9 @@ identity. All keys are optional — sensible defaults are derived automatically.
 | Key | Required | Default | Description |
 |-----|----------|---------|-------------|
 | `account_id` | No | resolved via STS | Your 12-digit AWS account id. |
-| `data_bucket` | No | `mnre-chatbot-data-<account_id>` | S3 bucket (ap-south-1) for the demo CSVs; created if missing. |
+| `data_bucket` | No | `residency-chatbot-data-<account_id>` | S3 bucket (ap-south-1) for the demo CSVs; created if missing. |
 | `data_prefix` | No | `chatbot-load` | Key prefix inside the bucket. |
-| `model_id` | No | `mistral.mistral-large-3-675b-instruct` | Bedrock ON_DEMAND bare modelId with Converse tool-use support. Cross-region profiles (`us.*`/`eu.*`/`ap.*`/`apac.*`/`jp.*`/`au.*`/`global.*`) are rejected by the residency guard. |
+| `model_id` | Yes | — | Bedrock ON_DEMAND bare modelId with Converse tool-use support, invocable in-region. Model-agnostic — pick one from the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page. Cross-region profiles (`us.*`/`eu.*`/`ap.*`/`apac.*`/`jp.*`/`au.*`/`global.*`) are rejected by the residency guard. |
 
 Region is hardcoded to `ap-south-1` in `infra/config.py` and is intentionally
 not overridable.
@@ -182,7 +185,7 @@ cell, booleans `true`/`false`, dates `YYYY-MM-DD`), then re-run the loader step.
 
 This deploy is self-contained: it creates a NEW VPC and its OWN Aurora cluster
 and loads the sample data — ideal for a demo. To run against a customer's
-EXISTING PM Surya Ghar database, two changes are required:
+EXISTING program database, two changes are required:
 
 1. Same VPC as the database. The Tool_Lambda runs in a VPC and must reach the
    existing Aurora on 5432. By default the stack creates a new VPC
@@ -247,13 +250,13 @@ these services (scope down as your governance requires):
         "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
         "iam:TagRole", "iam:UpdateAssumeRolePolicy"
       ],
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/mnre-chatbot-*"
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/residency-chatbot-*"
     },
     {
       "Sid": "PassProjectRolesOnly",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/mnre-chatbot-*",
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/residency-chatbot-*",
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": [
@@ -285,9 +288,9 @@ these services (scope down as your governance requires):
 ```
 
 Replace `<ACCOUNT_ID>` with your 12-digit account id. `iam:PassRole` is
-restricted to the project's `mnre-chatbot-*` roles and the services they are
+restricted to the project's `residency-chatbot-*` roles and the services they are
 passed to; for the tightest posture, also scope the `ServiceProvisioning`
-statement to `mnre-chatbot-*` ARNs per service, as done in
+statement to `residency-chatbot-*` ARNs per service, as done in
 `deploy/codebuild-deploy.yaml`.
 
 ## Documentation

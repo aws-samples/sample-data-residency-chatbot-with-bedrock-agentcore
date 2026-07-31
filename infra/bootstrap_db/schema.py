@@ -1,9 +1,9 @@
-"""Curated_Schema — single source of truth for the 4 MNRE tables (Requirement 3).
+"""Curated_Schema — single source of truth for the 4 curated tables (Requirement 3).
 
 WHY this exists
 ---------------
 The four source datasets (applications, subsidy, installation, inspection) are
-lifecycle snapshots of the SAME 162-column PM Surya Ghar record, so a single
+lifecycle snapshots of the SAME 162-column subsidy-application record, so a single
 curated, typed schema is applied to all four tables (Req 3.1). This module
 encodes that schema ONCE so two very different consumers stay in lock-step:
 

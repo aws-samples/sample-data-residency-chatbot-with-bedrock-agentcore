@@ -35,10 +35,14 @@ from agent.memory import (
     save as memory_save,
 )
 from agent.prompt import build_system_prompt
-from agent.residency import DEFAULT_MODEL_ID, residency_guard
+from agent.residency import residency_guard
 
 REGION = os.environ.get("REGION", "ap-south-1")
-MODEL_ID = os.environ.get("MODEL_ID", DEFAULT_MODEL_ID)
+# Model-agnostic: MODEL_ID is injected by the deploy (infra/deploy_agent.py from
+# deploy.config.json / CHATBOT_MODEL_ID). No hardcoded default — pick any bare
+# in-region ON_DEMAND modelId with Converse tool-use support from the Bedrock
+# regional model availability page.
+MODEL_ID = os.environ.get("MODEL_ID", "")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "")
 MEMORY_ID = os.environ.get("MEMORY_ID", "")
 ACTOR_ID = os.environ.get("ACTOR_ID", DEFAULT_ACTOR_ID)
@@ -51,8 +55,10 @@ WS_CALLBACK_URL = os.environ.get("WS_CALLBACK_URL", "")
 # async-dispatch note in handler()). Lambda sets AWS_LAMBDA_FUNCTION_NAME.
 SELF_FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
 
-# Fail fast at import (cold start) on a residency violation (Req 1.6, 1.7).
-MODEL_ID = residency_guard(MODEL_ID)
+# Fail fast at import (cold start) on a residency violation: the configured id
+# must be an in-region bare modelId, never a cross-region profile (Req 1.6, 1.7).
+# A missing MODEL_ID is reported at agent construction (_build_agent).
+MODEL_ID = residency_guard(MODEL_ID) if MODEL_ID else ""
 
 _MAX_HISTORY_TURNS = 10  # cap prior turns injected as context
 
@@ -86,6 +92,14 @@ def _build_agent(history_block: str):
 
     from agent.sigv4 import SigV4HTTPXAuth
 
+    if not MODEL_ID:
+        raise RuntimeError(
+            "MODEL_ID is not configured. Set model_id in deploy.config.json (or "
+            "the MODEL_ID env var) to a bare in-region ON_DEMAND modelId with "
+            "Converse tool-use support — see the Bedrock regional model "
+            "availability page: https://docs.aws.amazon.com/bedrock/latest/"
+            "userguide/models-region-compatibility.html"
+        )
     if not GATEWAY_URL:
         raise RuntimeError("GATEWAY_URL is not configured")
 
@@ -338,7 +352,7 @@ def _handle_http(event: dict) -> dict:
 
     if not question:
         return _http_response(200, {
-            "answer": "Please ask a question about the MNRE PM Surya Ghar data.",
+            "answer": "Please ask a question about the rooftop-solar program data.",
             "ok": False,
         })
 
@@ -366,7 +380,7 @@ def handler(event, context):  # noqa: ARG001 - Lambda signature
     print(f"[agent] connection={connection_id} model={MODEL_ID} region={REGION}")
 
     if not question or not str(question).strip():
-        answer = "Please ask a question about the MNRE PM Surya Ghar data."
+        answer = "Please ask a question about the rooftop-solar program data."
         _post_to_connection(connection_id, answer)
         return {"statusCode": 200, "connectionId": connection_id, "answer": answer, "ok": False}
 

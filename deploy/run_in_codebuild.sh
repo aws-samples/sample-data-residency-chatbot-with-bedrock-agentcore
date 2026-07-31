@@ -4,14 +4,15 @@
 #
 # CodeBuild provides Docker, git, and Python, so it can do the one thing
 # CloudShell / a pure CFN template cannot: build + push the Agent_Lambda
-# container image. The project source (the mnre-chatbot.zip the customer
+# container image. The project source (the residency-chatbot.zip the customer
 # uploaded to their S3 bucket) is already downloaded and UNPACKED at the build
 # root by CodeBuild, so this script just runs deploy.py / cleanup.py from there.
 #
 # Environment (set by the CFN project):
-#   ACTION          deploy | cleanup           (default: deploy)
-#   WITH_WEBSOCKET  true | false               (default: false)
-#   TARGET_ACCOUNT  12-digit account id        (the account CodeBuild runs in)
+#   ACTION            deploy | cleanup         (default: deploy)
+#   WITH_WEBSOCKET    true | false             (default: false)
+#   TARGET_ACCOUNT    12-digit account id      (the account CodeBuild runs in)
+#   CHATBOT_MODEL_ID  bare in-region Bedrock modelId (required for deploy)
 #   AWS_DEFAULT_REGION is forced to ap-south-1 by the project.
 set -euo pipefail
 
@@ -19,7 +20,7 @@ ACTION="${ACTION:-deploy}"
 WITH_WEBSOCKET="${WITH_WEBSOCKET:-false}"
 export CONTAINER_TOOL=docker          # CodeBuild has Docker, not finch
 
-echo "=== MNRE chatbot CodeBuild runner ==="
+echo "=== chatbot CodeBuild runner ==="
 echo "action=${ACTION} ws=${WITH_WEBSOCKET}"
 echo "account=${TARGET_ACCOUNT} region=${AWS_DEFAULT_REGION:-ap-south-1}"
 

@@ -58,9 +58,9 @@ def ensure_api() -> str:
         return api_id
     resp = apigw.create_rest_api(
         name=API_NAME,
-        description="MNRE chatbot REST entry point (regional ap-south-1, no CloudFront)",
+        description="chatbot REST entry point (regional ap-south-1, no CloudFront)",
         endpointConfiguration={"types": ["REGIONAL"]},
-        tags={"Project": "mnre-agentcore-chatbot"},
+        tags={"Project": "residency-agentcore-chatbot"},
     )
     print(f"[create] REST API: {resp['id']}")
     return resp["id"]
@@ -145,7 +145,7 @@ def ensure_invoke_permission(api_id: str, agent_arn: str) -> None:
     source = f"arn:aws:execute-api:{REGION}:{ACCOUNT}:{api_id}/*/POST/{RESOURCE_PATH}"
     try:
         lam.add_permission(
-            FunctionName=fn, StatementId="mnre-rest-invoke",
+            FunctionName=fn, StatementId="rest-invoke",
             Action="lambda:InvokeFunction", Principal="apigateway.amazonaws.com",
             SourceArn=source,
         )

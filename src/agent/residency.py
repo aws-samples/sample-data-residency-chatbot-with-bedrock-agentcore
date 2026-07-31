@@ -3,7 +3,8 @@
 WHY this exists
 ---------------
 This workload has strict single-Region data-residency requirements: all data
-and every inference call must stay in region ``ap-south-1`` (Mumbai).
+and every inference call must stay in the deployment Region (``ap-south-1``,
+Mumbai).
 
 Amazon Bedrock cross-region inference profiles violate this:
   - Geographic profiles (``us.*``, ``eu.*``, ``ap.*``, ``apac.*``, ``jp.*``,
@@ -11,22 +12,18 @@ Amazon Bedrock cross-region inference profiles violate this:
     execute outside the target Region.
   - ``global.*`` profiles route worldwide.
 
-A *bare* modelId (e.g. ``mistral.mistral-large-3-675b-instruct``) invoked
-ON_DEMAND against a region-pinned ``bedrock-runtime`` client stays entirely
-in-region.
+A *bare* modelId invoked ON_DEMAND against a region-pinned ``bedrock-runtime``
+client stays entirely in-region. This solution is MODEL-AGNOSTIC: any bare
+in-region modelId with Converse tool-use support works. Consult the Bedrock
+regional model availability page to pick one for your target Region —
+availability changes over time:
+https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html
 
-This guard is model-agnostic — it validates the ID format regardless of which
-foundation model is configured. It fails fast at Agent_Lambda startup if anyone
-configures a cross-region inference profile, preventing a residency violation
-from ever reaching Bedrock.
+This guard validates the ID format regardless of which foundation model is
+configured. It fails fast at Agent_Lambda startup if anyone configures a
+cross-region inference profile, preventing a residency violation from ever
+reaching Bedrock.
 """
-
-# Default in-region ON_DEMAND model: Mistral Large 3 — invocable in ap-south-1
-# with a bare modelId and verified native tool/function calling over the
-# Converse API. Any other bare in-region modelId with tool-use support works;
-# consult the Bedrock model support by Region page and set MODEL_ID (env) or
-# model_id (deploy.config.json). The residency guard below applies regardless.
-DEFAULT_MODEL_ID = "mistral.mistral-large-3-675b-instruct"
 
 # Cross-region inference-profile prefixes that can route inference outside the
 # target Region. Geographic prefixes + global.
@@ -52,6 +49,8 @@ def residency_guard(model_id: str) -> str:
         raise ValueError(
             f"Cross-region inference profile '{model_id}' is not allowed: it can "
             "route inference outside the target Region. Use a bare in-region "
-            f"ON_DEMAND modelId such as '{DEFAULT_MODEL_ID}'."
+            "ON_DEMAND modelId (see the Bedrock regional model availability page: "
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/"
+            "models-region-compatibility.html)."
         )
     return model_id

@@ -1,16 +1,16 @@
-"""AgentCore Gateway provisioning for the MNRE chatbot (Task 12, ap-south-1).
+"""AgentCore Gateway provisioning for the chatbot (Task 12, ap-south-1).
 
 WHAT THIS CREATES (idempotent, safe to re-run)
 ----------------------------------------------
-  1. IAM gateway service role ``mnre-chatbot-gateway-role`` — trusted by
+  1. IAM gateway service role ``residency-chatbot-gateway-role`` — trusted by
      ``bedrock-agentcore.amazonaws.com``, granted ``lambda:InvokeFunction`` on the
      Tool_Lambda so the Gateway can invoke the target on the caller's behalf.
-  2. ONE AgentCore Gateway ``mnre-chatbot-gateway`` — MCP server protocol with
+  2. ONE AgentCore Gateway ``residency-chatbot-gateway`` — MCP server protocol with
      IAM inbound authorization (``authorizerType='AWS_IAM'``, SigV4). NO
      Cognito/OAuth IdP (Req 6.3, 6.4). Callers must hold
      ``bedrock-agentcore:InvokeGateway`` (the Agent_Lambda role already does).
   3. ONE Lambda target on that gateway pointing at the existing Tool_Lambda
-     (``arn:...:function:mnre-chatbot-tool``), exposing FOUR per-table MCP tools
+     (``arn:...:function:residency-chatbot-tool``), exposing FOUR per-table MCP tools
      via the target's inline ``toolSchema`` (Req 6.1, 6.2, 6.5):
        - query_applications  -> table=applications
        - query_subsidy       -> table=subsidy
@@ -45,9 +45,9 @@ Reads/writes infra/network_ids.json (load existing, ADD keys, never overwrite):
   gateway_role_arn, gateway_id, gateway_arn, gateway_url (MCP endpoint),
   gateway_target_id, gateway_tool_names.
 
-Run:  uv run python infra/agentcore_setup.py   (from MNRE-AgentCore-Chatbot/)
+Run:  uv run python infra/agentcore_setup.py   (from the repo root/)
 
-TODO(security, later): the agent role ``mnre-chatbot-agent-lambda-role`` currently
+TODO(security, later): the agent role ``residency-chatbot-agent-lambda-role`` currently
 holds ``bedrock-agentcore:InvokeGateway`` on Resource "*" (see provision_iam_ddb.py).
 Once this gateway exists, tighten that statement's Resource to the gateway_arn
 printed by this script.
@@ -77,13 +77,13 @@ HERE = os.path.dirname(__file__)
 
 GATEWAY_NAME = f"{PROJECT}-gateway"
 GATEWAY_ROLE = f"{PROJECT}-gateway-role"
-TARGET_NAME = "mnre-tool-target"
+TARGET_NAME = "chatbot-tool-target"
 TOOL_LAMBDA_ARN = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PROJECT}-tool"
 
 # AgentCore Memory. NOTE: the memory name pattern is [a-zA-Z][a-zA-Z0-9_]{0,47}
 # — hyphens are REJECTED, so use underscores (unlike the gateway, which allows
 # hyphens).
-MEMORY_NAME = "mnre_chatbot_memory"
+MEMORY_NAME = "residency_chatbot_memory"
 # eventExpiryDuration is in DAYS, valid range 3..365. Short-term conversational
 # memory for a demo — 30 days is plenty; no long-term strategies (Req 8, demo).
 MEMORY_EVENT_EXPIRY_DAYS = 30
@@ -125,7 +125,7 @@ def ensure_gateway_role() -> str:
         iam.create_role(
             RoleName=GATEWAY_ROLE,
             AssumeRolePolicyDocument=json.dumps(GATEWAY_TRUST),
-            Description="MNRE chatbot AgentCore Gateway service role (invokes Tool_Lambda)",
+            Description="chatbot AgentCore Gateway service role (invokes Tool_Lambda)",
             Tags=[{"Key": k, "Value": v} for k, v in TAGS.items()],
         )
         print(f"[create] IAM role: {GATEWAY_ROLE}")
@@ -138,7 +138,7 @@ def ensure_gateway_role() -> str:
 
     iam.put_role_policy(
         RoleName=GATEWAY_ROLE,
-        PolicyName="mnre-gateway-invoke-tool-lambda",
+        PolicyName="gateway-invoke-tool-lambda",
         PolicyDocument=json.dumps(
             {
                 "Version": "2012-10-17",
@@ -153,7 +153,7 @@ def ensure_gateway_role() -> str:
             }
         ),
     )
-    print("         inline policy: mnre-gateway-invoke-tool-lambda")
+    print("         inline policy: gateway-invoke-tool-lambda")
     arn = iam.get_role(RoleName=GATEWAY_ROLE)["Role"]["Arn"]
     print(f"         role arn: {arn}")
     return arn
@@ -176,8 +176,8 @@ def _tool_definition(table: str) -> dict:
     return {
         "name": TOOL_FOR_TABLE[table],
         "description": (
-            f"Run a safe, read-only parameterized query against the MNRE '{table}' "
-            f"table (PM Surya Ghar rooftop-solar data). Returns aggregated/filtered "
+            f"Run a safe, read-only parameterized query against the '{table}' "
+            f"table (rooftop-solar subsidy data). Returns aggregated/filtered "
             f"rows as structured JSON. Available columns: {cols}."
         ),
         "inputSchema": {
@@ -389,13 +389,13 @@ def ensure_gateway(role_arn: str) -> dict:
     print(f"[create] gateway: {GATEWAY_NAME} (MCP, AWS_IAM inbound auth)")
     resp = acc.create_gateway(
         name=GATEWAY_NAME,
-        description="MNRE PM Surya Ghar chatbot — 4 per-table read-only query tools (MCP).",
+        description="data-residency chatbot — 4 per-table read-only query tools (MCP).",
         roleArn=role_arn,
         protocolType="MCP",
         protocolConfiguration={
             "mcp": {
                 "instructions": (
-                    "Four read-only tools query the MNRE PM Surya Ghar tables "
+                    "Four read-only tools query the rooftop-solar program tables "
                     "(applications, subsidy, installation, inspection) via a "
                     "parameterized query API. No raw SQL."
                 ),
@@ -549,7 +549,7 @@ def ensure_memory() -> dict:
           f"{MEMORY_EVENT_EXPIRY_DAYS}d expiry)")
     resp = acc.create_memory(
         name=MEMORY_NAME,
-        description="MNRE PM Surya Ghar chatbot — short-term session memory "
+        description="data-residency chatbot — short-term session memory "
                     "(conversational turns keyed by actorId + sessionId).",
         eventExpiryDuration=MEMORY_EVENT_EXPIRY_DAYS,
         # No memoryStrategies => short-term only (no long-term extraction). Demo-sufficient.
@@ -619,7 +619,7 @@ def main() -> None:
     print(f"  memory_id         = {memory_id}")
     print(f"  memory_arn        = {memory_arn}")
     print(
-        "\nTODO(security): tighten mnre-chatbot-agent-lambda-role's "
+        "\nTODO(security): tighten residency-chatbot-agent-lambda-role's "
         "bedrock-agentcore:InvokeGateway Resource from '*' to:\n  " + gateway_arn
     )
 

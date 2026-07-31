@@ -1,4 +1,4 @@
-"""Loader pure-logic for the MNRE curated tables (Task 6, Requirements 3 & 4).
+"""Loader pure-logic for the curated tables (Task 6, Requirements 3 & 4).
 
 This module is IMPORTABLE and PURE: ``coerce``/``project``/``load_batch`` do no
 I/O and never raise on bad data. They are consumed by:

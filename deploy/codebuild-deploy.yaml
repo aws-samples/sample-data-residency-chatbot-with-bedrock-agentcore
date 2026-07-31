@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  One-click launcher for the MNRE PM Surya Ghar data-residency chatbot.
+  One-click launcher for the data-residency chatbot.
   Creates an AWS CodeBuild project that downloads the source bundle
-  (mnre-chatbot.zip) from your S3 bucket and runs deploy.py (which builds the
+  (residency-chatbot.zip) from your S3 bucket and runs deploy.py (which builds the
   Agent_Lambda container image and provisions the whole stack: VPC, Aurora,
   Lambdas, AgentCore Gateway/Memory, API, Amplify UI). A custom resource starts
   the build automatically on stack CREATE. Region is fixed to ap-south-1
@@ -12,13 +12,26 @@ Parameters:
   SourceBucket:
     Type: String
     Description: >
-      S3 bucket (in ap-south-1, in THIS account) that holds the mnre-chatbot.zip
+      S3 bucket (in ap-south-1, in THIS account) that holds the residency-chatbot.zip
       source bundle. Upload it first, e.g.:
-      aws s3 cp mnre-chatbot.zip s3://<bucket>/mnre-chatbot.zip --region ap-south-1
+      aws s3 cp residency-chatbot.zip s3://<bucket>/residency-chatbot.zip --region ap-south-1
   SourceKey:
     Type: String
-    Default: mnre-chatbot.zip
+    Default: residency-chatbot.zip
     Description: S3 object key of the source bundle within SourceBucket.
+  ModelId:
+    Type: String
+    Description: >
+      Bedrock modelId the agent will use. Must be a BARE In-Region ON_DEMAND
+      modelId with Converse tool-use support (no us./eu./ap./apac./jp./au./
+      global. cross-region prefix — the residency guard rejects those). Pick
+      one from the Bedrock regional model availability page (availability
+      changes over time):
+      https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html
+    AllowedPattern: "^(?!us\\.)(?!eu\\.)(?!ap\\.)(?!apac\\.)(?!jp\\.)(?!au\\.)(?!global\\.).+$"
+    ConstraintDescription: >-
+      Must be a bare in-region modelId (cross-region inference-profile prefixes
+      us./eu./ap./apac./jp./au./global. are not allowed).
   WithWebsocket:
     Type: String
     Default: "false"
@@ -30,7 +43,7 @@ Resources:
   # ---------------------------------------------------------------------------
   # CodeBuild service role. deploy.py provisions the full stack, so this role
   # needs create/delete permissions across several services. Everything with a
-  # predictable ARN is scoped to this project's "mnre-chatbot-*" naming prefix.
+  # predictable ARN is scoped to this project's "residency-chatbot-*" naming prefix.
   # Actions that do not support resource-level scoping (or whose resource ids
   # are generated at create time) live in their own statements, constrained to
   # this region via aws:RequestedRegion, with per-statement comments.
@@ -38,7 +51,7 @@ Resources:
   CodeBuildRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "mnre-chatbot-deploy-codebuild-${AWS::AccountId}"
+      RoleName: !Sub "residency-chatbot-deploy-codebuild-${AWS::AccountId}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -47,7 +60,7 @@ Resources:
               Service: codebuild.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: mnre-chatbot-deploy-permissions
+        - PolicyName: residency-chatbot-deploy-permissions
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -61,10 +74,10 @@ Resources:
                   - logs:PutRetentionPolicy
                   - logs:TagResource
                 Resource:
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/mnre-chatbot-*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/mnre-chatbot-*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/mnre-chatbot-*:*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/mnre-chatbot-*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/residency-chatbot-*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/residency-chatbot-*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/residency-chatbot-*:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/residency-chatbot-*:*"
               - Sid: ReadSourceBundle
                 Effect: Allow
                 Action:
@@ -85,8 +98,8 @@ Resources:
                   - s3:PutBucketPublicAccessBlock
                   - s3:GetBucketPublicAccessBlock
                 Resource:
-                  - "arn:aws:s3:::mnre-chatbot-*"
-                  - "arn:aws:s3:::mnre-chatbot-*/*"
+                  - "arn:aws:s3:::residency-chatbot-*"
+                  - "arn:aws:s3:::residency-chatbot-*/*"
               - Sid: ProjectSecrets
                 Effect: Allow
                 Action:
@@ -96,7 +109,7 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:PutSecretValue
                   - secretsmanager:TagResource
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:mnre-chatbot-*"
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:residency-chatbot-*"
               - Sid: ProjectDynamoDB
                 Effect: Allow
                 Action:
@@ -109,7 +122,7 @@ Resources:
                   - dynamodb:Scan
                   - dynamodb:PutItem
                   - dynamodb:DeleteItem
-                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/mnre-chatbot-*"
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/residency-chatbot-*"
               - Sid: ProjectLambda
                 Effect: Allow
                 Action:
@@ -123,7 +136,7 @@ Resources:
                   - lambda:AddPermission
                   - lambda:RemovePermission
                   - lambda:TagResource
-                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:mnre-chatbot-*"
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:residency-chatbot-*"
               - Sid: ProjectEcr
                 Effect: Allow
                 Action:
@@ -141,7 +154,7 @@ Resources:
                   - ecr:ListImages
                   - ecr:DescribeImages
                   - ecr:BatchDeleteImage
-                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/mnre-chatbot-*"
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/residency-chatbot-*"
               - Sid: EcrAuthToken
                 # GetAuthorizationToken does not support resource-level scoping;
                 # constrained to this region instead.
@@ -166,9 +179,9 @@ Resources:
                   - rds:DescribeDBSubnetGroups
                   - rds:AddTagsToResource
                 Resource:
-                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:mnre-chatbot-*"
-                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:mnre-chatbot-*"
-                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:subgrp:mnre-chatbot-*"
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:residency-chatbot-*"
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:residency-chatbot-*"
+                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:subgrp:residency-chatbot-*"
               - Sid: ReadOnlyDescribes
                 # Read-only discovery calls used for idempotency checks; these
                 # EC2/RDS/STS describe actions do not support resource-level
@@ -266,12 +279,12 @@ Resources:
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
                   - iam:ListAttachedRolePolicies
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/mnre-chatbot-*"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/residency-chatbot-*"
               - Sid: PassProjectRolesOnly
                 Effect: Allow
                 Action:
                   - iam:PassRole
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/mnre-chatbot-*"
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/residency-chatbot-*"
                 Condition:
                   StringEquals:
                     iam:PassedToService:
@@ -286,8 +299,8 @@ Resources:
   DeployProject:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: !Sub "mnre-chatbot-deploy-${AWS::AccountId}"
-      Description: Builds + deploys the MNRE chatbot into this account (ap-south-1).
+      Name: !Sub "residency-chatbot-deploy-${AWS::AccountId}"
+      Description: Builds + deploys the chatbot into this account (ap-south-1).
       ServiceRole: !GetAtt CodeBuildRole.Arn
       Artifacts:
         Type: NO_ARTIFACTS
@@ -304,10 +317,12 @@ Resources:
             Value: !Ref WithWebsocket
           - Name: TARGET_ACCOUNT
             Value: !Ref AWS::AccountId
+          - Name: CHATBOT_MODEL_ID
+            Value: !Ref ModelId
           - Name: AWS_DEFAULT_REGION
             Value: ap-south-1
       Source:
-        # The customer uploads mnre-chatbot.zip to their S3 bucket; CodeBuild
+        # The customer uploads residency-chatbot.zip to their S3 bucket; CodeBuild
         # downloads + unpacks it at the build root (no git, no credentials).
         Type: S3
         Location: !Sub "${SourceBucket}/${SourceKey}"
@@ -326,7 +341,7 @@ Resources:
   StartBuildRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "mnre-chatbot-startbuild-${AWS::AccountId}"
+      RoleName: !Sub "residency-chatbot-startbuild-${AWS::AccountId}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -360,7 +375,7 @@ Resources:
               Calls only the CodeBuild control plane; no VPC resources are
               involved (the launcher stack creates the VPC later).
     Properties:
-      FunctionName: !Sub "mnre-chatbot-startbuild-${AWS::AccountId}"
+      FunctionName: !Sub "residency-chatbot-startbuild-${AWS::AccountId}"
       Runtime: python3.12
       Handler: index.handler
       Timeout: 60
@@ -395,7 +410,7 @@ Outputs:
     Value: !Ref DeployProject
   BuildLogsHint:
     Description: Where to watch progress.
-    Value: !Sub "CodeBuild console → build history for mnre-chatbot-deploy-${AWS::AccountId} (region ap-south-1). The Amplify URL is printed at the end of the build log."
+    Value: !Sub "CodeBuild console → build history for residency-chatbot-deploy-${AWS::AccountId} (region ap-south-1). The Amplify URL is printed at the end of the build log."
   CleanupHint:
     Description: How to tear everything down.
-    Value: !Sub "aws codebuild start-build --project-name mnre-chatbot-deploy-${AWS::AccountId} --environment-variables-override name=ACTION,value=cleanup,type=PLAINTEXT --region ap-south-1"
+    Value: !Sub "aws codebuild start-build --project-name residency-chatbot-deploy-${AWS::AccountId} --environment-variables-override name=ACTION,value=cleanup,type=PLAINTEXT --region ap-south-1"

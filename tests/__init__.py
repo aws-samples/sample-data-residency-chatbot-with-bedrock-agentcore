@@ -1,1 +1,1 @@
-"""Test suite for the MNRE AgentCore Chatbot."""
+"""Test suite for the data-residency AgentCore chatbot."""

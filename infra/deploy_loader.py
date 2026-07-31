@@ -8,7 +8,7 @@ End-to-end, idempotent:
      reused tool-lambda role (its baseline grants do not include S3 reads).
   3. Build a deployment zip: handler.py + a fresh copy of src/common/schema.py +
      psycopg2 (manylinux2014_x86_64, cp312 wheel for the Lambda runtime).
-  4. Create/update the ``mnre-chatbot-db-loader`` Lambda in the 2 private subnets
+  4. Create/update the ``residency-chatbot-db-loader`` Lambda in the 2 private subnets
      + lambda-sg, reusing the tool-lambda role; timeout 300s / memory 1024MB.
   5. Invoke it once per table and print rows loaded per table.
 

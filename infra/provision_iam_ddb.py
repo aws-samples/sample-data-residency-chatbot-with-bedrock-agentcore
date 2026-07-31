@@ -1,11 +1,11 @@
 """Provision the DynamoDB connections table and the least-privilege IAM roles for
-the MNRE chatbot (ap-south-1).
+the chatbot (ap-south-1).
 
 Idempotent. Creates:
-  - DynamoDB table `mnre-chatbot-connections` (PK connectionId, PAY_PER_REQUEST, TTL on `ttl`)
+  - DynamoDB table `residency-chatbot-connections` (PK connectionId, PAY_PER_REQUEST, TTL on `ttl`)
     — used by the production WebSocket transport ($connect/$disconnect helpers).
-  - IAM role `mnre-chatbot-tool-lambda-role`  (Tool_Lambda, runs IN VPC, psycopg)
-  - IAM role `mnre-chatbot-agent-lambda-role` (Agent_Lambda, OUT of VPC)
+  - IAM role `residency-chatbot-tool-lambda-role`  (Tool_Lambda, runs IN VPC, psycopg)
+  - IAM role `residency-chatbot-agent-lambda-role` (Agent_Lambda, OUT of VPC)
 
 Both API Gateway transports (REST for the demo, WebSocket for production) invoke
 the Agent_Lambda via a resource-based permission (lambda:AddPermission, principal
@@ -118,11 +118,11 @@ def _put_inline(role, policy_name, document):
 
 def ensure_tool_role(ids):
     """Tool_Lambda: runs IN VPC, reads Aurora secret, connects via psycopg."""
-    arn = _ensure_role(TOOL_ROLE, "MNRE chatbot Tool_Lambda (in-VPC, read-only DB)")
+    arn = _ensure_role(TOOL_ROLE, "chatbot Tool_Lambda (in-VPC, read-only DB)")
     _attach_managed(TOOL_ROLE, "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole")
 
     secrets_resources = [ids["db_master_secret_arn"], APP_SECRET_PREFIX_ARN]
-    _put_inline(TOOL_ROLE, "mnre-tool-secrets-and-logs", {
+    _put_inline(TOOL_ROLE, "tool-secrets-and-logs", {
         "Version": "2012-10-17",
         "Statement": [
             {
@@ -148,22 +148,23 @@ def ensure_tool_role(ids):
 
 def ensure_agent_role():
     """Agent_Lambda: OUT of VPC; Bedrock + AgentCore (gateway/memory) + WS @connections."""
-    arn = _ensure_role(AGENT_ROLE, "MNRE chatbot Agent_Lambda (Bedrock + AgentCore + WS)")
+    arn = _ensure_role(AGENT_ROLE, "chatbot Agent_Lambda (Bedrock + AgentCore + WS)")
     _attach_managed(AGENT_ROLE, "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole")
 
-    _put_inline(AGENT_ROLE, "mnre-agent-bedrock-agentcore-ws", {
+    _put_inline(AGENT_ROLE, "agent-bedrock-agentcore-ws", {
         "Version": "2012-10-17",
         "Statement": [
             {
                 "Sid": "BedrockInvokeInRegion",
                 "Effect": "Allow",
                 "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
-                # The configured ON_DEMAND model ARN; also allow any ap-south-1
-                # foundation model so a same-region fallback needs no policy change.
-                "Resource": [
-                    MODEL_ARN,
-                    f"arn:aws:bedrock:{REGION}::foundation-model/*",
-                ],
+                # Any same-region foundation model (model-agnostic solution;
+                # the configured ON_DEMAND model ARN is included when set).
+                "Resource": (
+                    [MODEL_ARN, f"arn:aws:bedrock:{REGION}::foundation-model/*"]
+                    if MODEL_ARN
+                    else [f"arn:aws:bedrock:{REGION}::foundation-model/*"]
+                ),
             },
             {
                 "Sid": "AgentCoreGatewayInvoke",

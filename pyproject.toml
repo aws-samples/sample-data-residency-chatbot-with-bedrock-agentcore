@@ -1,7 +1,7 @@
 [project]
-name = "mnre-agentcore-chatbot"
+name = "residency-agentcore-chatbot"
 version = "0.1.0"
-description = "Data-residency-compliant NL chatbot for MNRE PM Surya Ghar (ap-south-1)"
+description = "Data-residency-compliant NL chatbot on Amazon Bedrock AgentCore (ap-south-1)"
 requires-python = ">=3.13"
 dependencies = [
     "boto3",

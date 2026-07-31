@@ -5,19 +5,19 @@ critical ones automatically (identity, finch, Bedrock model presence), but this
 is the manual checklist and the rationale.
 
 ## Bedrock model access (most common blocker)
-- The chatbot defaults to `mistral.mistral-large-3-675b-instruct` — a bare
-  ON_DEMAND `modelId` invocable in `ap-south-1` with Converse tool-use support.
-  Confirm it is listed:
+- The chatbot is model-agnostic: set `model_id` (in `deploy.config.json`) to a
+  bare ON_DEMAND `modelId` invocable in `ap-south-1` with Converse tool-use
+  support. Confirm your chosen model is listed:
   ```bash
   aws bedrock list-foundation-models --region ap-south-1 \
-    --query "modelSummaries[?modelId=='mistral.mistral-large-3-675b-instruct'].{id:modelId,inf:inferenceTypesSupported}"
+    --query "modelSummaries[?modelId=='<your-model-id>'].{id:modelId,inf:inferenceTypesSupported}"
   ```
 - Then ENABLE model access in the Bedrock console (Model access → the
   configured model). Without the grant, the first `Converse` call returns
   `AccessDeniedException`.
 - Any other bare in-region modelId with tool-use support works — set `model_id`
   in `deploy.config.json`. Check the
-  [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html)
+  [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html)
   page; regional availability changes over time.
 - Residency: use the bare `modelId` only. Cross-region inference profiles
   (`us.*` / `eu.*` / `ap.*` / `apac.*` / `jp.*` / `au.*` / `global.*`) are

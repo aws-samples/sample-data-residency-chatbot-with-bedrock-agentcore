@@ -7,9 +7,9 @@
 # The Agent_Lambda only calls Bedrock + AgentCore Gateway/Memory + WS
 # @connections — never the database — so it needs no VPC attachment and no NAT.
 #
-# Build context = the repo root (MNRE-AgentCore-Chatbot/) so we can COPY both
+# Build context = the repo root (the repo root/) so we can COPY both
 # src/agent and src/common. Build with finch (per core.md tool preferences):
-#   finch build -f infra/agent.Dockerfile -t mnre-chatbot-agent:latest \
+#   finch build -f infra/agent.Dockerfile -t residency-chatbot-agent:latest \
 #       --platform linux/amd64 .
 FROM public.ecr.aws/lambda/python:3.13
 

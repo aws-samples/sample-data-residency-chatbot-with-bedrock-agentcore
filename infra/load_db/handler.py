@@ -1,4 +1,4 @@
-"""In-VPC loader Lambda for the MNRE chatbot Aurora (Task 9, ap-south-1).
+"""In-VPC loader Lambda for the chatbot Aurora (Task 9, ap-south-1).
 
 Runs IN the default VPC's private subnets (reusing tool-lambda role + lambda_sg
 + private subnets) so it can reach the private Aurora over 5432 and read its

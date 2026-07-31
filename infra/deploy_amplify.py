@@ -41,7 +41,7 @@ from config import PROJECT, REGION, load_ids, save_ids  # noqa: E402
 
 APP_NAME = f"{PROJECT}-ui"
 BRANCH = "main"
-MARKER = "PM Surya Ghar"  # known string from ui/index.html
+MARKER = "Rooftop Solar Program"  # known string from ui/index.html
 POLL_TIMEOUT = 300  # seconds (~5 min)
 POLL_INTERVAL = 5
 
@@ -74,7 +74,7 @@ def ensure_app() -> dict:
         return app
     resp = amplify.create_app(
         name=APP_NAME,
-        description="MNRE PM Surya Ghar chatbot Browser_UI (manual deploy, static shell only)",
+        description="data-residency chatbot Browser_UI (manual deploy, static shell only)",
         platform="WEB",
     )
     app = resp["app"]
@@ -188,7 +188,7 @@ def verify(url: str) -> bool:
     _require_https(url)
     try:
         resp = httpx.get(
-            url, headers={"User-Agent": "mnre-deploy-verify"},
+            url, headers={"User-Agent": "chatbot-deploy-verify"},
             timeout=30, follow_redirects=True,
         )
         status = resp.status_code

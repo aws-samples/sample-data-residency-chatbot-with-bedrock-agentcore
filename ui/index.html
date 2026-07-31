@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<title>PM Surya Ghar — MNRE Executive Dashboard</title>
+<title>Rooftop Solar Program — Executive Dashboard</title>
 <script src="vendor/chart.umd.min.js"></script>
 <script type="module">
   import { animate, stagger, inView } from "./vendor/motion.esm.min.js";
@@ -88,7 +88,7 @@
 <body>
   <header>
     <div class="brand">
-      <h1>PM Surya Ghar — MNRE Executive Dashboard</h1>
+      <h1>Rooftop Solar Program — Executive Dashboard</h1>
       <div class="sub">Rooftop-solar subsidy program · data residency: ap-south-1 (Mumbai)</div>
     </div>
     <div class="badge">India-hosted · in-region inference</div>
@@ -146,7 +146,7 @@
   var API_ENDPOINT = resolveEndpoint();
   var SESSION_ID = "ui-" + Math.random().toString(36).slice(2) + "-" + Date.now();
 
-  var MNRE_GREEN="#1b7a3d", SAFFRON="#f5a623", NAVY="#0f2c4d";
+  var BRAND_GREEN="#1b7a3d", SAFFRON="#f5a623", NAVY="#0f2c4d";
 
   // ---- Themed capability tiles (fills bottom-left, drives chips) ----------
   var THEMES = [
@@ -170,18 +170,18 @@
     Chart.defaults.font.family="-apple-system,Segoe UI,Roboto,sans-serif"; Chart.defaults.font.size=11;
     new Chart(document.getElementById("stateChart"),{ type:"bar",
       data:{ labels:["Maharashtra","Andhra Pradesh","West Bengal","Gujarat","Odisha","Telangana","Rajasthan","Karnataka"],
-        datasets:[{ label:"Applications", data:[14473,1680,986,620,335,180,167,118], backgroundColor:MNRE_GREEN, borderRadius:4 }] },
+        datasets:[{ label:"Applications", data:[14473,1680,986,620,335,180,167,118], backgroundColor:BRAND_GREEN, borderRadius:4 }] },
       options:{ animation:{duration:900}, plugins:{legend:{display:false}, title:{display:true,text:"Top states by applications"}}, scales:{y:{beginAtZero:true}} } });
     new Chart(document.getElementById("stageChart"),{ type:"doughnut",
       data:{ labels:["Vendor Selection","Subsidy Request","Feasibility","Application"],
-        datasets:[{ data:[19947,33,19,1], backgroundColor:[MNRE_GREEN,SAFFRON,NAVY,"#9bbf57"] }] },
+        datasets:[{ data:[19947,33,19,1], backgroundColor:[BRAND_GREEN,SAFFRON,NAVY,"#9bbf57"] }] },
       options:{ animation:{animateRotate:true,duration:1000}, plugins:{legend:{position:"bottom"}, title:{display:true,text:"Applications by stage"}} } });
     new Chart(document.getElementById("bankChart"),{ type:"bar",
       data:{ labels:["State Bank of India","Bank of Baroda","Canara Bank","Punjab Natl. Bank","Union Bank"],
         datasets:[{ label:"₹ disbursed (M)", data:[548.4,46.1,45.4,41.1,12.8], backgroundColor:SAFFRON, borderRadius:4 }] },
       options:{ indexAxis:"y", animation:{duration:900}, plugins:{legend:{display:false}, title:{display:true,text:"Tranche-1 disbursed by bank (₹M)"}}, scales:{x:{beginAtZero:true}} } });
     new Chart(document.getElementById("inspChart"),{ type:"doughnut",
-      data:{ labels:["Approved","Returned for correction"], datasets:[{ data:[19991,9], backgroundColor:[MNRE_GREEN,"#d9534f"] }] },
+      data:{ labels:["Approved","Returned for correction"], datasets:[{ data:[19991,9], backgroundColor:[BRAND_GREEN,"#d9534f"] }] },
       options:{ animation:{animateRotate:true,duration:1000}, plugins:{legend:{position:"bottom"}, title:{display:true,text:"Inspection outcomes"}} } });
   }
 

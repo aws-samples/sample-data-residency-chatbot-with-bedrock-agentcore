@@ -2,7 +2,7 @@
 
 WHY this exists
 ---------------
-The MNRE AgentCore Gateway uses IAM inbound authorization (``authorizerType=
+The AgentCore Gateway uses IAM inbound authorization (``authorizerType=
 'AWS_IAM'``), so every MCP HTTP request from the Agent_Lambda must be SigV4-signed
 for service ``bedrock-agentcore`` in ``ap-south-1`` using the Lambda execution
 role's credentials (the role holds ``bedrock-agentcore:InvokeGateway``).

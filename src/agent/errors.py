@@ -17,7 +17,7 @@ from __future__ import annotations
 _BASE_MESSAGE = (
     "Sorry, I couldn't answer that question right now because a data lookup "
     "failed. Please try rephrasing your question or ask about something else "
-    "in the MNRE PM Surya Ghar data."
+    "in the rooftop-solar program data."
 )
 
 

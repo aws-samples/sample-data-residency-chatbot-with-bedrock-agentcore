@@ -2,7 +2,7 @@
 
 A data-residency-compliant natural-language chatbot pattern: ask plain-English questions and get answers computed from structured data in Aurora PostgreSQL — without writing SQL, and with all data and AI inference staying within a single AWS Region (`ap-south-1`, Mumbai).
 
-The pattern is demonstrated with India's PM Surya Ghar rooftop-solar program — administered by the Ministry of New and Renewable Energy (MNRE) — as the reference use case, deployed with fully synthetic sample data. The residency controls and the governed text-to-SQL security design are applicable to any sector or geography with similar requirements (see [Adapting to your Region](#adapting-to-your-region-and-use-case)).
+The pattern is demonstrated with a rooftop-solar subsidy program as the reference use case, deployed with fully synthetic sample data. The residency controls and the governed text-to-SQL security design are applicable to any sector or geography with similar requirements (see [Adapting to your Region](#adapting-to-your-region-and-use-case)).
 
 What makes this different from general natural-language-to-SQL solutions is the combination: single-Region residency enforced at every layer (model invocation, network, hosting) plus governed, whitelist-validated text-to-SQL on Bedrock AgentCore — not just query generation.
 
@@ -18,15 +18,16 @@ Everything runs inside `ap-south-1` (Mumbai). The only component outside the Reg
 
 Two options — both deploy the full stack to `ap-south-1` and end with a live Amplify URL:
 
-Option A — one-click CloudFormation (recommended). Upload the `mnre-chatbot.zip` bundle to an S3 bucket in your account, then launch `deploy/codebuild-deploy.yaml` in `ap-south-1`; a CodeBuild job pulls the bundle, builds the image, and provisions everything. No git access or local tools needed.
+Option A — one-click CloudFormation (recommended). Upload the `residency-chatbot.zip` bundle to an S3 bucket in your account, then launch `deploy/codebuild-deploy.yaml` in `ap-south-1`; a CodeBuild job pulls the bundle, builds the image, and provisions everything. No git access or local tools needed.
 
 ```bash
-aws s3 cp mnre-chatbot.zip s3://<your-bucket>/mnre-chatbot.zip --region ap-south-1
+aws s3 cp residency-chatbot.zip s3://<your-bucket>/residency-chatbot.zip --region ap-south-1
 aws cloudformation create-stack --region ap-south-1 \
-  --stack-name mnre-chatbot-launcher \
+  --stack-name residency-chatbot-launcher \
   --template-body file://deploy/codebuild-deploy.yaml \
   --parameters ParameterKey=SourceBucket,ParameterValue=<your-bucket> \
-               ParameterKey=SourceKey,ParameterValue=mnre-chatbot.zip \
+               ParameterKey=SourceKey,ParameterValue=residency-chatbot.zip \
+               ParameterKey=ModelId,ParameterValue=<bare-in-region-model-id> \
   --capabilities CAPABILITY_NAMED_IAM
 ```
 
@@ -38,7 +39,7 @@ uv run python deploy.py               # full stack, REST transport
 # or: uv run python deploy.py --with-websocket   # also the production WSS API
 ```
 
-Prerequisite for both: enable Bedrock model access in `ap-south-1` for the configured model (default `mistral.mistral-large-3-675b-instruct` — one console toggle). Any bare in-region ON_DEMAND model with tool-use support works; see the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html) page since availability changes over time. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide and [PREFLIGHT.md](PREFLIGHT.md) for the checklist. The deploy ships with small synthetic sample data (zero real PII); swap in your own CSVs anytime.
+Prerequisite for both: pick a bare in-region ON_DEMAND model with Converse tool-use support from the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page (availability changes over time), set it as `model_id`, and enable Bedrock model access for it in `ap-south-1` (one console toggle). The solution is model-agnostic — any bare in-region modelId works; cross-region inference profiles are rejected by the residency guard. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide and [PREFLIGHT.md](PREFLIGHT.md) for the checklist. The deploy ships with small synthetic sample data (zero real PII); swap in your own CSVs anytime.
 
 ### End-to-end steps (numbered to match the diagram)
 
@@ -63,7 +64,7 @@ A user types a plain-English question in a browser; the system answers it from t
 - **Browser UI (AWS Amplify)** — the dashboard with charts + a chat box. Static page, hosted in-region.
 - **API Gateway (REST API)** — the front door. The browser POSTs the question here.
 - **Agent_Lambda (the "brain")** — runs a Strands AI agent. It interprets the question, decides what data to fetch, and writes the final natural-language answer.
-- **Amazon Bedrock (in-region ON_DEMAND model)** — the LLM the agent calls to reason and to phrase the answer. Default is Mistral Large 3; any bare in-region modelId with tool-use support works. Runs in-region, on-demand.
+- **Amazon Bedrock (in-region ON_DEMAND model)** — the LLM the agent calls to reason and to phrase the answer. Model-agnostic: any bare in-region modelId with Converse tool-use support works (see [model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html)). Runs in-region, on-demand.
 - **AgentCore Gateway** — a secure "tool counter." It exposes 4 safe, read-only query tools (one per data table) to the agent. The agent can't touch the database directly — only through these governed tools.
 - **Tool_Lambda** — the only thing that talks to the database. It accepts a structured request (filters, group-by, totals, sort), builds a safe read-only SQL query, and returns rows. No raw SQL is ever allowed.
 - **Aurora PostgreSQL (Serverless v2)** — the database holding the curated program data, in private subnets (not reachable from the internet).
@@ -120,7 +121,7 @@ Two guarantees: every number comes from a live query (no hallucinated figures �
 
 ## Production considerations (deploying against an existing database)
 
-The one-click deploy is self-contained: it creates a **new VPC** and its **own Aurora PostgreSQL** cluster, loads the synthetic sample data, and points the Tool_Lambda at it. That is ideal for a demo. When connecting to a customer's **existing** PM Surya Ghar database, two changes are required:
+The one-click deploy is self-contained: it creates a **new VPC** and its **own Aurora PostgreSQL** cluster, loads the synthetic sample data, and points the Tool_Lambda at it. That is ideal for a demo. When connecting to a customer's **existing** program database, two changes are required:
 
 1. **Deploy into the same VPC as the database.** The Tool_Lambda must run in a VPC (and subnets/security groups) that can reach the existing Aurora cluster on port 5432. By default this stack provisions a brand-new VPC (`10.20.0.0/16`), which cannot reach a DB in a different VPC. For a real deployment, adapt `infra/provision_network.py` (and the ids it writes to `network_ids.json`) to **reuse the customer's existing VPC, private subnets, and a security group allowed into the DB's security group** — instead of creating new ones. Also ensure a Secrets Manager VPC endpoint (or NAT-free path) exists in that VPC so the Tool_Lambda can read the DB credential in-region.
 
@@ -130,10 +131,10 @@ In short: for production, skip the "create new VPC + new Aurora + load sample da
 
 ## Adapting to your Region and use case
 
-This repository documents the pattern with `ap-south-1` (Mumbai) and the PM Surya Ghar program as the concrete, deployable reference. The residency controls are not India-specific — the same five controls apply to any geography with data-residency requirements (EU, Middle East, Southeast Asia, and others):
+This repository documents the pattern with `ap-south-1` (Mumbai) and a rooftop-solar subsidy program as the concrete, deployable reference. The residency controls are not India-specific — the same five controls apply to any geography with data-residency requirements (EU, Middle East, Southeast Asia, and others):
 
 1. **Region** — the Region is pinned in `infra/config.py` (`REGION`). Change it to your target Region; every client in the stack is region-pinned from that one value.
-2. **Model** — pick a bare in-region ON_DEMAND model with Converse tool-use support from the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html) page and set `model_id` in `deploy.config.json`. Availability differs per Region and changes over time.
+2. **Model** — pick a bare in-region ON_DEMAND model with Converse tool-use support from the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page and set `model_id` in `deploy.config.json`. Availability differs per Region and changes over time.
 3. **Residency guard** — `src/agent/residency.py` rejects all cross-region inference-profile prefixes (`us.*`, `eu.*`, `ap.*`, `apac.*`, `jp.*`, `au.*`, `global.*`) regardless of target Region; no change needed.
 4. **Data model** — replace the 4 curated tables and the whitelist in `src/common/schema.py` with your own tables/columns; the validator, query builder, and Gateway tool definitions all derive from that single schema module.
 5. **Regulatory mapping** — which regulation (if any) requires residency is sector- and geography-specific. This architecture guarantees the technical fact — all data and inference stay in one Region — and you map that control to your own regulatory obligations.

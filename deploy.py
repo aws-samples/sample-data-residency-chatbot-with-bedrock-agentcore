@@ -1,4 +1,4 @@
-"""One-command deploy orchestrator for the MNRE AgentCore chatbot (ap-south-1).
+"""One-command deploy orchestrator for the data-residency AgentCore chatbot (ap-south-1).
 
 Runs the full stack, in dependency order, into the CURRENT AWS account. Each
 step is idempotent, so re-running after a failure is safe. Every step writes its
@@ -138,7 +138,16 @@ def preflight() -> None:
 
 
 def _check_bedrock_model_access() -> None:
-    """Confirm the model exists in-region and access is granted (best effort)."""
+    """Confirm a model is configured, exists in-region, and access is granted."""
+    if not MODEL_ID:
+        raise SystemExit(
+            "PREFLIGHT FAIL: no Bedrock model configured. This solution is "
+            "model-agnostic — set model_id in deploy.config.json (or the "
+            "CHATBOT_MODEL_ID env var) to a bare in-region ON_DEMAND modelId "
+            "with Converse tool-use support. Pick one from the Bedrock regional "
+            "model availability page (availability changes over time): "
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html"
+        )
     br = boto3.client("bedrock", region_name=REGION)
     try:
         models = br.list_foundation_models()["modelSummaries"]
@@ -149,7 +158,8 @@ def _check_bedrock_model_access() -> None:
     if MODEL_ID not in ids:
         raise SystemExit(
             f"PREFLIGHT FAIL: model {MODEL_ID} is not available in {REGION}. "
-            f"Pick a bare ON_DEMAND modelId available in-region."
+            f"Pick a bare ON_DEMAND modelId available in-region: "
+            f"https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html"
         )
     print(f"Bedrock model  : {MODEL_ID} present in-region")
     print(
@@ -160,7 +170,7 @@ def _check_bedrock_model_access() -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Deploy the MNRE chatbot stack")
+    ap = argparse.ArgumentParser(description="Deploy the chatbot stack")
     ap.add_argument("--with-websocket", action="store_true",
                     help="also provision the production WebSocket API")
     ap.add_argument("--from", dest="from_step", default=None,

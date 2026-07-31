@@ -1,4 +1,4 @@
-"""Provision a fresh, dedicated VPC + private networking for the MNRE chatbot
+"""Provision a fresh, dedicated VPC + private networking for the chatbot
 (ap-south-1). Creates everything the private data tier needs, with NO NAT and NO
 internet gateway — the private subnets reach AWS services only via VPC endpoints.
 

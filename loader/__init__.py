@@ -1,1 +1,1 @@
-"""MNRE chatbot data loader (pure-logic + prep + in-VPC bulk load)."""
+"""chatbot data loader (pure-logic + prep + in-VPC bulk load)."""
