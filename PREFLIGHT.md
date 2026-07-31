@@ -5,18 +5,24 @@ critical ones automatically (identity, finch, Bedrock model presence), but this
 is the manual checklist and the rationale.
 
 ## Bedrock model access (most common blocker)
-- The chatbot uses `anthropic.claude-3-haiku-20240307-v1:0` — a bare ON_DEMAND
-  `modelId` invocable in `ap-south-1`. Confirm it is listed:
+- The chatbot defaults to `mistral.mistral-large-3-675b-instruct` — a bare
+  ON_DEMAND `modelId` invocable in `ap-south-1` with Converse tool-use support.
+  Confirm it is listed:
   ```bash
-  aws bedrock list-foundation-models --region ap-south-1 --by-provider anthropic \
-    --query "modelSummaries[?modelId=='anthropic.claude-3-haiku-20240307-v1:0'].{id:modelId,inf:inferenceTypesSupported}"
+  aws bedrock list-foundation-models --region ap-south-1 \
+    --query "modelSummaries[?modelId=='mistral.mistral-large-3-675b-instruct'].{id:modelId,inf:inferenceTypesSupported}"
   ```
-- Then ENABLE model access in the Bedrock console (Model access → Anthropic
-  Claude 3 Haiku). Without the grant, the first `Converse` call returns
+- Then ENABLE model access in the Bedrock console (Model access → the
+  configured model). Without the grant, the first `Converse` call returns
   `AccessDeniedException`.
-- Residency: use the bare `modelId` only. `apac.*` / `global.*` cross-region
-  inference profiles are blocked by `src/agent/residency.py` because they can
-  route inference outside India.
+- Any other bare in-region modelId with tool-use support works — set `model_id`
+  in `deploy.config.json`. Check the
+  [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html)
+  page; regional availability changes over time.
+- Residency: use the bare `modelId` only. Cross-region inference profiles
+  (`us.*` / `eu.*` / `ap.*` / `apac.*` / `jp.*` / `au.*` / `global.*`) are
+  blocked by `src/agent/residency.py` because they can route inference outside
+  the target Region.
 
 ## Networking
 - `deploy.py` (via `infra/provision_network.py`) creates a fresh dedicated VPC

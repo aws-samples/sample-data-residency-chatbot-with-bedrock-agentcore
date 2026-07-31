@@ -3,12 +3,13 @@
 ARCHITECTURE (design Req 7)
 ---------------------------
 Input from the WebSocket integration: ``{connectionId, question}``. Per request:
-  1. ``residency_guard(MODEL_ID)`` at startup — fail fast on apac./global. ids
-     (Req 1.6, 1.7).
+  1. ``residency_guard(MODEL_ID)`` at startup — fail fast on any cross-region
+     inference-profile id (us./eu./ap./apac./jp./au./global.) (Req 1.6, 1.7).
   2. Load prior turns from AgentCore Memory keyed by sessionId=connectionId
      (actorId=ACTOR_ID) so follow-ups have context (Req 7.7, 8.2-8.4, 8.6).
-  3. Run a Strands ``Agent`` with ``BedrockModel(mistral.mistral-large, ap-south-1)``,
-     a system prompt describing the 4 MNRE tables, the prior history as context,
+  3. Run a Strands ``Agent`` with a region-pinned ``BedrockModel`` (the
+     configured in-region ON_DEMAND modelId, ap-south-1),
+     a system prompt describing the 4 program tables, the prior history as context,
      and an MCP client connected to the Gateway MCP URL using SigV4 IAM auth
      (Req 7.1-7.5).
   4. Save the (question, answer) turn to Memory (Req 7.7).
@@ -93,8 +94,9 @@ def _build_agent(history_block: str):
         lambda: streamablehttp_client(url=GATEWAY_URL, auth=auth)
     )
 
-    # Mistral Large does NOT support tool use in streaming mode, so disable
-    # streaming (use the Converse, not ConverseStream, API).
+    # Some in-region models do not support tool use in streaming mode, so
+    # disable streaming (use the Converse, not ConverseStream, API) for
+    # portability across configured models.
     model = BedrockModel(model_id=MODEL_ID, region_name=REGION, streaming=False)
     system_prompt = build_system_prompt()
     if history_block:
@@ -112,7 +114,7 @@ def _run_agent(question: str, history_block: str) -> str:
     # The MCP connection lifecycle is managed by the context manager; tools are
     # discovered from the Gateway and handed to the agent. We keep ONLY the
     # per-table query_* tools and drop the Gateway's built-in search tool, which
-    # otherwise muddies Mistral's tool selection (verified during research).
+    # otherwise muddies the model's tool selection (verified during research).
     with mcp_client:
         tools = mcp_client.list_tools_sync()
         query_tools = [t for t in tools if "query_" in t.tool_name] or tools
@@ -214,8 +216,8 @@ def _dispatch_async(event: dict) -> bool:
 def _clean_answer(text: str) -> str:
     """Strip mechanical / query-jargon phrasing from the model's answer.
 
-    The model is told to answer for executives, but Claude occasionally still
-    leaks phrases like "The query on the 'inspection' table shows ...". This is a
+    The model is told to answer for executives, but models occasionally still
+    leak phrases like "The query on the 'inspection' table shows ...". This is a
     deterministic safety net so the user NEVER sees query mechanics regardless of
     what the model emits. It only rewrites known lead-in patterns; the factual
     content (the numbers) is preserved.

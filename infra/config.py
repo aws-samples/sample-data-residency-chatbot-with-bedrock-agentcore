@@ -35,9 +35,11 @@ import boto3
 # Data residency: everything runs in Mumbai. Do NOT make this configurable.
 REGION = "ap-south-1"
 
-# Bedrock model — in-region ON_DEMAND bare modelId (guarded against apac./global.
-# cross-region inference profiles by src/agent/residency.py).
-DEFAULT_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+# Bedrock model — in-region ON_DEMAND bare modelId (guarded against cross-region
+# inference profiles — us./eu./ap./apac./jp./au./global. — by
+# src/agent/residency.py). Any bare in-region modelId with Converse tool-use
+# support works; see the Bedrock model support by Region page.
+DEFAULT_MODEL_ID = "mistral.mistral-large-3-675b-instruct"
 
 # Resource-name prefix. All created resources are named ``<PROJECT>-*`` so they
 # are easy to find and delete. Account-scoped, so it needs no uniqueness suffix.

@@ -16,7 +16,7 @@ ap-south-1 (Mumbai) — fixed for data residency.
 Prerequisites (checked by preflight):
   - AWS credentials for the target account (ap-south-1).
   - finch installed + VM started (for the Agent_Lambda container image).
-  - Bedrock model access ENABLED for the configured model (Claude 3 Haiku).
+  - Bedrock model access ENABLED for the configured model (see infra/config.py).
   - uv installed (you are already running under it).
 
 See DEPLOYMENT.md for the full guide.
@@ -141,7 +141,7 @@ def _check_bedrock_model_access() -> None:
     """Confirm the model exists in-region and access is granted (best effort)."""
     br = boto3.client("bedrock", region_name=REGION)
     try:
-        models = br.list_foundation_models(byProvider="anthropic")["modelSummaries"]
+        models = br.list_foundation_models()["modelSummaries"]
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] could not list foundation models: {exc}")
         return
@@ -154,7 +154,7 @@ def _check_bedrock_model_access() -> None:
     print(f"Bedrock model  : {MODEL_ID} present in-region")
     print(
         "  NOTE: ensure model ACCESS is enabled in the Bedrock console "
-        "(Model access → Anthropic Claude 3 Haiku). Without it the first "
+        "(Model access → the configured model). Without it the first "
         "invoke returns AccessDeniedException."
     )
 

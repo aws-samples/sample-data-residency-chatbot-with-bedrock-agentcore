@@ -19,7 +19,7 @@ prerequisites below.
 
 | Requirement | Notes |
 |-------------|-------|
-| Bedrock model access | Enable Anthropic Claude 3 Haiku in the Bedrock console → Model access (region `ap-south-1`). Without it the first invoke returns `AccessDeniedException`. This is a one-time console toggle no automation can do for you. |
+| Bedrock model access | Enable the configured model (default `mistral.mistral-large-3-675b-instruct`) in the Bedrock console → Model access (region `ap-south-1`). Without it the first invoke returns `AccessDeniedException`. This is a one-time console toggle no automation can do for you. |
 | Permissions to launch | Option A: permission to create the CloudFormation stack with `CAPABILITY_NAMED_IAM`. Option B: the [IAM policy](#iam-policy-for-the-deploying-identity) below on your identity. |
 
 ## Option A — One-click CloudFormation (from an S3 source bundle)
@@ -107,7 +107,7 @@ identity. All keys are optional — sensible defaults are derived automatically.
 | `account_id` | No | resolved via STS | Your 12-digit AWS account id. |
 | `data_bucket` | No | `mnre-chatbot-data-<account_id>` | S3 bucket (ap-south-1) for the demo CSVs; created if missing. |
 | `data_prefix` | No | `chatbot-load` | Key prefix inside the bucket. |
-| `model_id` | No | `anthropic.claude-3-haiku-20240307-v1:0` | Bedrock ON_DEMAND bare modelId. `apac.*`/`global.*` profiles are rejected by the residency guard. |
+| `model_id` | No | `mistral.mistral-large-3-675b-instruct` | Bedrock ON_DEMAND bare modelId with Converse tool-use support. Cross-region profiles (`us.*`/`eu.*`/`ap.*`/`apac.*`/`jp.*`/`au.*`/`global.*`) are rejected by the residency guard. |
 
 Region is hardcoded to `ap-south-1` in `infra/config.py` and is intentionally
 not overridable.

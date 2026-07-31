@@ -6,7 +6,7 @@ from hypothesis import strategies as st
 
 from agent.residency import residency_guard
 
-_CROSS_REGION_PREFIXES = ("apac.", "global.")
+_CROSS_REGION_PREFIXES = ("us.", "eu.", "ap.", "apac.", "jp.", "au.", "global.")
 
 
 # Feature: mnre-agentcore-chatbot, Property 1: Residency model-id guard
@@ -19,8 +19,9 @@ _CROSS_REGION_PREFIXES = ("apac.", "global.")
     ),
 )
 def test_property_1_residency_model_id_guard(suffix, prefix, accepted):
-    """residency_guard accepts iff the id is NOT prefixed apac./global.,
-    and raises for every id that is (Validates: Requirements 1.7, 1.8)."""
+    """residency_guard accepts iff the id carries NO cross-region inference
+    profile prefix (us./eu./ap./apac./jp./au./global.), and raises for every id
+    that does (Validates: Requirements 1.7, 1.8)."""
     # Raise branch: any id carrying a cross-region prefix must be rejected.
     rejected = prefix + suffix
     with pytest.raises(ValueError):

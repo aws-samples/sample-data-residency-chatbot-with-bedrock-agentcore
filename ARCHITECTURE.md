@@ -1,8 +1,8 @@
 # MNRE AgentCore Chatbot — Architecture
 
 How the chatbot works internally. Every component runs in `ap-south-1` (Mumbai);
-the only thing outside India is the user's browser, and it only ever receives the
-final natural-language answer — never raw program data.
+the only component outside the Region is the user's browser, and it only ever
+receives the final natural-language answer — never raw program data.
 
 ## System overview
 
@@ -12,7 +12,7 @@ final natural-language answer — never raw program data.
 Browser (Amplify static UI)
   → API Gateway  (REST /chat = demo · WebSocket = production)
     → Agent_Lambda (Strands agent, container image, OUT of VPC)
-        ├─ Amazon Bedrock  (Claude 3 Haiku, ON_DEMAND, in-region)   — reasons + phrases
+        ├─ Amazon Bedrock  (in-region ON_DEMAND model)              — reasons + phrases
         ├─ AgentCore Memory                                          — load/save session turns
         └─ AgentCore Gateway (MCP, SigV4 IAM)  →  Tool_Lambda (IN VPC)
                                                     → Aurora PostgreSQL (SELECT-only)
@@ -38,7 +38,7 @@ Both are regional `ap-south-1` endpoints — no CloudFront (a global service) an
 |-----------|------|-----------------|---------|
 | Browser UI | `ui/index.html` | static HTML/JS (Amplify) | Dashboard + chat box; POSTs questions, renders answers |
 | Agent_Lambda | `src/agent/handler.py` | container image, out-of-VPC | Strands agent: interprets question, calls tools, phrases answer |
-| Bedrock model | (invoked by agent) | `anthropic.claude-3-haiku-20240307-v1:0` ON_DEMAND | Reasoning + tool selection + answer phrasing |
+| Bedrock model | (invoked by agent) | `mistral.mistral-large-3-675b-instruct` ON_DEMAND (default; configurable) | Reasoning + tool selection + answer phrasing |
 | AgentCore Gateway | `infra/agentcore_setup.py` | MCP server, AWS_IAM auth | Exposes 4 read-only `query_<table>` tools to the agent |
 | Tool_Lambda | `src/tool/handler.py` | zip, in-VPC | The only DB client: validate → build safe SQL → execute |
 | Aurora PostgreSQL | `infra/provision_aurora.py` | Serverless v2, private | Holds the 4 curated tables |
@@ -52,7 +52,7 @@ Both are regional `ap-south-1` endpoints — no CloudFront (a global service) an
 | Handler | `src/agent/handler.py` | Event routing (REST/WS/direct), turn orchestration, answer cleanup |
 | Prompt | `src/agent/prompt.py` | System prompt describing the 4 tables + how to map NL → query shape |
 | Memory | `src/agent/memory.py` | Load/save conversational turns via AgentCore Memory events |
-| Residency guard | `src/agent/residency.py` | Fail-fast on `apac.*`/`global.*` cross-region model ids |
+| Residency guard | `src/agent/residency.py` | Fail-fast on cross-region model ids (`us.*`/`eu.*`/`ap.*`/`apac.*`/`jp.*`/`au.*`/`global.*`) |
 | SigV4 auth | `src/agent/sigv4.py` | `httpx.Auth` that signs MCP-over-HTTP for `bedrock-agentcore` |
 | Errors | `src/agent/errors.py` | Never-raising wrapper → always returns a polite answer |
 
@@ -71,16 +71,16 @@ Both are regional `ap-south-1` endpoints — no CloudFront (a global service) an
 ```
 1. Browser POST /chat {question, sessionId}
 2. API Gateway → Agent_Lambda (_handle_http)
-3. residency_guard(MODEL_ID)                         # apac./global. → hard fail
+3. residency_guard(MODEL_ID)                         # cross-region prefix → hard fail
 4. Memory.load(actorId, sessionId)  ── prior turns ──► system-prompt context
-5. Strands Agent + BedrockModel(claude-3-haiku, streaming=False)
-       Claude decides: query_<table> + {filters, group_by, aggregations, order_by, having, limit}
+5. Strands Agent + BedrockModel(in-region modelId, streaming=False)
+       The model decides: query_<table> + {filters, group_by, aggregations, order_by, having, limit}
 6. MCP call (SigV4) → AgentCore Gateway → Tool_Lambda
        validate_request()  → reject on any violation (no query built)
        build_query()       → SELECT ... %s ... (whitelist identifiers, bound literals)
        psycopg (readonly=True) → Aurora → rows
        shape_response()    → {table,row_count,columns,rows,truncated}   (creds redacted in logs)
-7. rows → agent → Claude phrases a plain-English answer
+7. rows → agent → the model phrases a plain-English answer
 8. _clean_answer()         # strip any leaked "the query on the 'X' table shows…"
 9. Memory.save(question, answer)
 10. answer → HTTP response → browser renders
@@ -91,7 +91,7 @@ Both are regional `ap-south-1` endpoints — no CloudFront (a global service) an
 The one-line version:
 
 ```
-Browser → API Gateway (REST /chat) → Agent_Lambda → Bedrock (Claude 3 Haiku) + AgentCore Memory
+Browser → API Gateway (REST /chat) → Agent_Lambda → Bedrock (in-region model) + AgentCore Memory
          → AgentCore Gateway (MCP/SigV4) → Tool_Lambda (in-VPC) → Aurora → back up the chain → answer
 ```
 
@@ -105,18 +105,19 @@ Browser → API Gateway (REST /chat) → Agent_Lambda → Bedrock (Claude 3 Haik
 3. Agent_Lambda wakes up (`src/agent/handler.py`). It detects the HTTP-proxy
    shape and calls `_handle_http`, which pulls out `question` and `sessionId`
    and runs one "turn." At cold start, `residency_guard(MODEL_ID)` has already
-   run — it hard-fails if anyone configured an `apac.*`/`global.*` cross-region
-   model, guaranteeing in-region inference.
+   run — it hard-fails if anyone configured a cross-region inference-profile id
+   (`us.*`/`eu.*`/`ap.*`/`apac.*`/`jp.*`/`au.*`/`global.*`), guaranteeing
+   in-region inference.
 4. Recall context (AgentCore Memory). `memory.load()` fetches the prior turns
    for this `(actor, session)` from AgentCore Memory, oldest-first, and folds
    them into the system prompt. That is what makes "…and in Gujarat?" work as a
    follow-up.
-5. Reason (Bedrock Claude 3 Haiku). The handler builds a Strands `Agent` with
+5. Reason (Bedrock, in-region ON_DEMAND). The handler builds a Strands `Agent` with
    the system prompt (from `prompt.py` — it describes the 4 tables and how to map
    a question to a query shape) and an MCP client pointed at the AgentCore
-   Gateway. Claude reads the question and decides which tool to call and with
+   Gateway. The model reads the question and decides which tool to call and with
    what arguments — e.g. "call `query_applications`, group by state, count, sort
-   desc, limit 5." Claude does not see the database; it only picks a tool and
+   desc, limit 5." The model does not see the database; it only picks a tool and
    parameters.
 6. Tool call over MCP + SigV4 (`sigv4.py`). The tool call travels as an
    MCP-over-HTTP request to the Gateway. Every such request is SigV4-signed for
@@ -141,7 +142,7 @@ Browser → API Gateway (REST /chat) → Agent_Lambda → Bedrock (Claude 3 Haik
 9. Query Aurora. Aurora PostgreSQL (private, in the VPC) runs the parameterized
    `SELECT` and returns the rows.
 10. Rows flow back up. Aurora → Tool_Lambda → Gateway → Agent. The agent hands
-    the real numbers back to Claude, which phrases a clean, plain-English
+    the real numbers back to the model, which phrases a clean, plain-English
     answer. `_clean_answer()` strips any leaked "the query on the 'X' table
     shows…" phrasing so the user sees business language, not query mechanics.
 11. Remember + reply. `memory.save()` writes this (question, answer) turn back
@@ -152,7 +153,7 @@ Two guarantees this flow gives you:
 
 - No hallucinated numbers: every figure in an answer came from a live Aurora
   query. If the data can't answer, the bot says so instead of guessing.
-- No data leaves India: every hop — API Gateway, Lambda, Bedrock (in-region
+- No data leaves the Region: every hop — API Gateway, Lambda, Bedrock (in-region
   ON_DEMAND), AgentCore, Aurora, Secrets Manager — is in `ap-south-1`. The only
   thing outside is the browser, and it only ever receives the final answer text.
 
