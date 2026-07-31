@@ -16,30 +16,64 @@ Everything runs inside `ap-south-1` (Mumbai). The only component outside the Reg
 
 ## Quick start (deploy to your account)
 
-Two options — both deploy the full stack to `ap-south-1` and end with a live Amplify URL:
+Both options deploy the full stack to `ap-south-1` and end with a live Amplify URL. The deploy ships with small synthetic sample data (zero real PII); swap in your own CSVs anytime.
 
-Option A — one-click CloudFormation (recommended). Upload the `residency-chatbot.zip` bundle to an S3 bucket in your account, then launch `deploy/codebuild-deploy.yaml` in `ap-south-1`; a CodeBuild job pulls the bundle, builds the image, and provisions everything. No git access or local tools needed.
+### Step 0 — choose your model (required for both options)
 
-```bash
-aws s3 cp residency-chatbot.zip s3://<your-bucket>/residency-chatbot.zip --region ap-south-1
-aws cloudformation create-stack --region ap-south-1 \
-  --stack-name residency-chatbot-launcher \
-  --template-body file://deploy/codebuild-deploy.yaml \
-  --parameters ParameterKey=SourceBucket,ParameterValue=<your-bucket> \
-               ParameterKey=SourceKey,ParameterValue=residency-chatbot.zip \
-               ParameterKey=ModelId,ParameterValue=<bare-in-region-model-id> \
-  --capabilities CAPABILITY_NAMED_IAM
-```
+The solution is model-agnostic: there is no default model, you pick one.
 
-Option B — run it yourself (laptop/EC2/Cloud9 with Docker or finch):
+1. Open the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page and pick a model that is available in `ap-south-1` with a bare ON_DEMAND `modelId` (no `us.`/`eu.`/`ap.`/`apac.`/`jp.`/`au.`/`global.` prefix) and Converse tool-use support. Cross-region inference-profile ids are rejected by the residency guard.
+2. Verify it is invocable ON_DEMAND in-region:
+   ```bash
+   aws bedrock list-foundation-models --region ap-south-1 \
+     --query "modelSummaries[?modelId=='<your-model-id>'].{id:modelId,inf:inferenceTypesSupported}"
+   ```
+3. Enable access for it in the Bedrock console → Model access (region `ap-south-1`). One-time console toggle; without it the first invoke returns `AccessDeniedException`.
 
-```bash
-uv sync
-uv run python deploy.py               # full stack, REST transport
-# or: uv run python deploy.py --with-websocket   # also the production WSS API
-```
+### Option A — one-click CloudFormation (recommended)
 
-Prerequisite for both: pick a bare in-region ON_DEMAND model with Converse tool-use support from the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page (availability changes over time), set it as `model_id`, and enable Bedrock model access for it in `ap-south-1` (one console toggle). The solution is model-agnostic — any bare in-region modelId works; cross-region inference profiles are rejected by the residency guard. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide and [PREFLIGHT.md](PREFLIGHT.md) for the checklist. The deploy ships with small synthetic sample data (zero real PII); swap in your own CSVs anytime.
+No git access or local tools needed. A CodeBuild job pulls the source bundle, builds the image, and provisions everything.
+
+1. Upload the source bundle to an S3 bucket in your account:
+   ```bash
+   aws s3 cp residency-chatbot.zip s3://<your-bucket>/residency-chatbot.zip --region ap-south-1
+   ```
+2. Launch the stack, passing your model id as the required `ModelId` parameter:
+   ```bash
+   aws cloudformation create-stack --region ap-south-1 \
+     --stack-name residency-chatbot-launcher \
+     --template-body file://deploy/codebuild-deploy.yaml \
+     --parameters ParameterKey=SourceBucket,ParameterValue=<your-bucket> \
+                  ParameterKey=SourceKey,ParameterValue=residency-chatbot.zip \
+                  ParameterKey=ModelId,ParameterValue=<your-model-id> \
+     --capabilities CAPABILITY_NAMED_IAM
+   ```
+   (Console equivalent: upload `deploy/codebuild-deploy.yaml`, fill in `SourceBucket`, `SourceKey`, and `ModelId` on the parameters screen.)
+3. Watch progress in CodeBuild → build history for `residency-chatbot-deploy-<account>`. The Amplify URL is printed at the end of the build log.
+
+### Option B — run deploy.py yourself (laptop/EC2/Cloud9 with Docker or finch)
+
+1. Clone the repo and install dependencies:
+   ```bash
+   uv sync
+   ```
+2. Set your model id — either in `deploy.config.json` (persists):
+   ```bash
+   cp deploy.config.example.json deploy.config.json
+   # edit deploy.config.json and set:  "model_id": "<your-model-id>"
+   ```
+   or as a one-off environment variable:
+   ```bash
+   export CHATBOT_MODEL_ID=<your-model-id>
+   ```
+3. Deploy:
+   ```bash
+   uv run python deploy.py               # full stack, REST transport
+   # or: uv run python deploy.py --with-websocket   # also the production WSS API
+   ```
+   The preflight fails fast (before creating any resources) if no model is configured or the model is not present in `ap-south-1`. The Amplify URL is printed at the end.
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide (IAM policy, prerequisites, teardown) and [PREFLIGHT.md](PREFLIGHT.md) for the manual checklist.
 
 ### End-to-end steps (numbered to match the diagram)
 
