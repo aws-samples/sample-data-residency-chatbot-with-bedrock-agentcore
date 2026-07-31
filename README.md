@@ -52,7 +52,7 @@ The rows flow back Aurora → Tool_Lambda → Gateway → agent; the agent feeds
 
 ## The one-line story
 
-A user types a plain-English question in a browser; the system answers it from the real PM Surya Ghar program data in a database — without anyone writing SQL, and without any data or AI inference ever leaving India (everything runs in AWS Mumbai, `ap-south-1`).
+A user types a plain-English question in a browser; the system answers it from the real PM Surya Ghar program data in a database — without anyone writing SQL, and without any data or AI inference leaving the ap-south-1 Region—satisfying MeitY Cloud Guidelines for government workloads and RBI data-localization requirements (everything runs in AWS Mumbai, `ap-south-1`).
 
 ## The components (who does what)
 
