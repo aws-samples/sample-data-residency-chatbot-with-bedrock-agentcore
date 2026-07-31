@@ -27,7 +27,7 @@ reaching Bedrock.
 DEFAULT_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
 
 # Cross-region inference profile prefixes that can route inference outside India.
-_CROSS_REGION_PREFIXES = ("apac.", "global.")
+_CROSS_REGION_PREFIXES = ("apac.", "global.", "us.", "eu.", "ap.")
 
 
 def residency_guard(model_id: str) -> str:
