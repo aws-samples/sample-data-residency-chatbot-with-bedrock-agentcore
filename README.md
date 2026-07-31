@@ -34,7 +34,7 @@ uv run python deploy.py               # full stack, REST transport
 # or: uv run python deploy.py --with-websocket   # also the production WSS API
 ```
 
-Prerequisite for both: enable Bedrock model access for Claude 3 Haiku in the target account (one console toggle). See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide and [PREFLIGHT.md](PREFLIGHT.md) for the checklist. The deploy ships with small synthetic sample data (zero real PII); swap in your own CSVs anytime.
+Prerequisite for both: enable Bedrock model access for Claude Haiku 4.5 in the target account (one console toggle). See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide and [PREFLIGHT.md](PREFLIGHT.md) for the checklist. The deploy ships with small synthetic sample data (zero real PII); swap in your own CSVs anytime.
 
 ### End-to-end steps (numbered to match the diagram)
 
@@ -59,7 +59,7 @@ A user types a plain-English question in a browser; the system answers it from t
 - **Browser UI (AWS Amplify)** — the dashboard with charts + a chat box. Static page, hosted in-region.
 - **API Gateway (REST API)** — the front door. The browser POSTs the question here.
 - **Agent_Lambda (the "brain")** — runs a Strands AI agent. It interprets the question, decides what data to fetch, and writes the final natural-language answer.
-- **Amazon Bedrock (Claude 3 Haiku)** — the LLM the agent calls to reason and to phrase the answer. Runs in-region, on-demand.
+- **Amazon Bedrock (Claude Haiku 4.5)** — the LLM the agent calls to reason and to phrase the answer. Runs in-region, on-demand.
 - **AgentCore Gateway** — a secure "tool counter." It exposes 4 safe, read-only query tools (one per data table) to the agent. The agent can't touch the database directly — only through these governed tools.
 - **Tool_Lambda** — the only thing that talks to the database. It accepts a structured request (filters, group-by, totals, sort), builds a safe read-only SQL query, and returns rows. No raw SQL is ever allowed.
 - **Aurora PostgreSQL (Serverless v2)** — the database holding the curated program data, in private subnets (not reachable from the internet).
@@ -104,7 +104,7 @@ Browser → Amplify → API Gateway (REST) → Agent_Lambda → Bedrock / Memory
 2. Front door (API Gateway REST). `POST /chat` is an `AWS_PROXY` integration straight to Agent_Lambda (`OPTIONS /chat` handles CORS preflight).
 3. Agent_Lambda (`src/agent/handler.py`). Detects the HTTP shape and runs one turn. `residency_guard(MODEL_ID)` (cold start) hard-fails on any `apac.*`/`global.*` model, guaranteeing in-region inference.
 4. Recall (AgentCore Memory). `memory.load()` folds the prior turns for this session into the system prompt, so follow-ups have context.
-5. Reason (Bedrock Claude 3 Haiku). A Strands agent + the system prompt (`prompt.py`) let Claude pick which `query_<table>` tool to call and with what arguments. Claude never sees the database — it only chooses a tool and parameters.
+5. Reason (Bedrock Claude Haiku 4.5). A Strands agent + the system prompt (`prompt.py`) let Claude pick which `query_<table>` tool to call and with what arguments. Claude never sees the database — it only chooses a tool and parameters.
 6. Tool call (MCP + SigV4). The call is SigV4-signed for `bedrock-agentcore` and sent to the AgentCore Gateway, which uses `AWS_IAM` auth — unsigned callers are rejected.
 7. Gateway → Tool_Lambda. The Gateway exposes exactly 4 read-only tools and forwards the request to Tool_Lambda (the only component inside the private VPC), with `table` pinned per tool.
 8. Safe execution (`src/tool/`). `validate.py` rejects anything off the whitelist (or raw SQL) and runs nothing; `query_builder.py` builds a `SELECT`-only, fully parameterized statement; `handler.py` reads the read-only DB secret via a VPC endpoint (no NAT) and queries Aurora as a read-only user. Credentials are redacted from logs.
