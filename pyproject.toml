@@ -9,8 +9,6 @@ dependencies = [
     "mcp",
     "httpx",
     "psycopg[binary]",
-    "hypothesis",
-    "pytest",
 ]
 
 [tool.pytest.ini_options]
@@ -22,5 +20,7 @@ package = false
 
 [dependency-groups]
 dev = [
+    "hypothesis",
+    "pytest",
     "websockets>=16.0",
 ]
