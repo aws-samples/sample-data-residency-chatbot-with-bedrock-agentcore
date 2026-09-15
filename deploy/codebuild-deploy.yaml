@@ -4,9 +4,13 @@ Description: >
   Creates an AWS CodeBuild project that downloads the source bundle
   (residency-chatbot.zip) from your S3 bucket and runs deploy.py (which builds the
   Agent_Lambda container image and provisions the whole stack: VPC, Aurora,
-  Lambdas, AgentCore Gateway/Memory, API, Amplify UI). A custom resource starts
+  Lambdas, AgentCore Gateway/Memory, API, Amplify UI, and the AWS WAF web ACL
+  that fronts the Amplify UI). A custom resource starts
   the build automatically on stack CREATE. Region is fixed to ap-south-1
-  (Mumbai) for data residency — launch this stack in ap-south-1.
+  (Mumbai) for data residency — launch this stack in ap-south-1. (The WAF web
+  ACL is the one exception: Amplify's firewall integration requires it in the
+  global CloudFront scope, us-east-1 — it is firewall configuration only and
+  holds no program data.)
 
 Parameters:
   SourceBucket:
@@ -264,6 +268,47 @@ Resources:
                 Condition:
                   StringEquals:
                     aws:RequestedRegion: !Ref AWS::Region
+              - Sid: WafForAmplifyUi
+                # AWS WAF firewall for the Amplify-hosted UI. Amplify Hosting's
+                # firewall integration REQUIRES the web ACL in the GLOBAL
+                # (CloudFront) scope, which lives in us-east-1 — regional web
+                # ACLs are not compatible with Amplify. These actions therefore
+                # cannot carry the aws:RequestedRegion condition used elsewhere.
+                # Scoped to this project's web ACL name and this account's
+                # Amplify apps. The web ACL is firewall CONFIGURATION only —
+                # no program data is stored or processed outside ap-south-1.
+                # Associate/Disassociate authorize against BOTH the web ACL and
+                # the protected app, and Amplify attaches a resource policy to
+                # the ACL during association (Put/GetPermissionPolicy).
+                Effect: Allow
+                Action:
+                  - wafv2:CreateWebACL
+                  - wafv2:GetWebACL
+                  - wafv2:UpdateWebACL
+                  - wafv2:DeleteWebACL
+                  - wafv2:TagResource
+                  - wafv2:ListTagsForResource
+                  - wafv2:AssociateWebACL
+                  - wafv2:DisassociateWebACL
+                  - wafv2:GetWebACLForResource
+                  - wafv2:PutPermissionPolicy
+                  - wafv2:GetPermissionPolicy
+                  - amplify:AssociateWebACL
+                  - amplify:DisassociateWebACL
+                Resource:
+                  - !Sub "arn:aws:wafv2:us-east-1:${AWS::AccountId}:global/webacl/residency-chatbot-*/*"
+                  - !Sub "arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/*"
+              - Sid: WafListWebAcls
+                # ListWebACLs does not support resource-level scoping; it is
+                # used for the idempotent find-or-create of the web ACL and is
+                # constrained to us-east-1 (home of the CloudFront WAF scope).
+                Effect: Allow
+                Action:
+                  - wafv2:ListWebACLs
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: us-east-1
               - Sid: IamForDeploy
                 Effect: Allow
                 Action:
@@ -304,7 +349,9 @@ Resources:
       ServiceRole: !GetAtt CodeBuildRole.Arn
       Artifacts:
         Type: NO_ARTIFACTS
-      TimeoutInMinutes: 60
+      # WAF association can add several minutes of polling on top of the
+      # Aurora + container-image build time, so the ceiling is 75 (was 60).
+      TimeoutInMinutes: 75
       Environment:
         Type: LINUX_CONTAINER
         Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0

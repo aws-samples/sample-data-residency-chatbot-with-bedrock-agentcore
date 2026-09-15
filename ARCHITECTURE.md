@@ -9,7 +9,9 @@ receives the final natural-language answer — never raw program data.
 ![Data-residency chatbot architecture (ap-south-1)](docs/architecture.png)
 
 ```
-Browser (Amplify static UI)
+Browser
+  → AWS WAF (web ACL on the Amplify app: rate limit + AWS managed rules)
+  → Amplify static UI
   → API Gateway  (REST /chat = demo · WebSocket = production)
     → Agent_Lambda (Strands agent, container image, OUT of VPC)
         ├─ Amazon Bedrock  (in-region ON_DEMAND model)              — reasons + phrases
@@ -36,6 +38,7 @@ Both are regional `ap-south-1` endpoints — no CloudFront (a global service) an
 
 | Component | File | Model / Runtime | Purpose |
 |-----------|------|-----------------|---------|
+| AWS WAF web ACL | `infra/provision_waf.py` | WAFv2, global (CloudFront) scope — required by Amplify Firewall | Inspects every UI request: rate-limits floods, blocks bad IPs / common exploits / bad inputs |
 | Browser UI | `ui/index.html` | static HTML/JS (Amplify) | Dashboard + chat box; POSTs questions, renders answers |
 | Agent_Lambda | `src/agent/handler.py` | container image, out-of-VPC | Strands agent: interprets question, calls tools, phrases answer |
 | Bedrock model | (invoked by agent) | configured `model_id` — any bare in-region ON_DEMAND modelId with Converse tool-use support | Reasoning + tool selection + answer phrasing |
@@ -96,7 +99,9 @@ Browser → API Gateway (REST /chat) → Agent_Lambda → Bedrock (in-region mod
 ```
 
 1. Ask (browser). The user types a question in the Amplify-hosted page
-   (`ui/index.html`). JavaScript does a `fetch()` POST to the REST endpoint with
+   (`ui/index.html`), which was served through the AWS WAF web ACL attached to
+   the Amplify app (rate limiting + AWS managed rules inspect every UI
+   request). JavaScript does a `fetch()` POST to the REST endpoint with
    `{question, sessionId}`. `sessionId` is a random per-page id so follow-ups
    stay in one conversation.
 2. Front door (API Gateway REST). `POST /chat` is an `AWS_PROXY` integration
@@ -174,8 +179,14 @@ Tool_Lambda whitelist — so they can never drift.
   parameterized, so SQL injection and writes are structurally impossible.
 - No hallucination: every number comes from a live query. If the data can't
   answer, the bot says so.
+- Perimeter: the Amplify UI is fronted by an AWS WAF web ACL (rate-based rule
+  + AWSManagedRulesAmazonIpReputationList / CommonRuleSet /
+  KnownBadInputsRuleSet). Amplify's firewall integration requires the web ACL
+  in the global (CloudFront) scope — it is firewall configuration only and
+  carries no program data.
 - Data residency: everything in `ap-south-1`; Bedrock invoked in-region
-  ON_DEMAND (guarded); no CloudFront.
+  ON_DEMAND (guarded); no CloudFront distribution in the stack (the WAF web
+  ACL above is the sole global configuration resource).
 - The agent handler never raises: any tool/model failure returns a polite
   "couldn't answer" message (`errors.wrap_tool_error`).
 
@@ -230,7 +241,8 @@ constraints, not despite them.
 │   ├── deploy_agent.py        # Agent_Lambda container image
 │   ├── provision_rest_api.py  # REST /chat (demo)
 │   ├── provision_websocket.py # WebSocket API (production)
-│   └── deploy_amplify.py      # host UI on Amplify (injects REST URL)
+│   ├── deploy_amplify.py      # host UI on Amplify (injects REST URL)
+│   └── provision_waf.py       # AWS WAF web ACL on the Amplify app (Firewall)
 ├── tools/make_sample_data.py  # synthetic data generator
 └── ui/index.html              # dashboard + chat
 ```

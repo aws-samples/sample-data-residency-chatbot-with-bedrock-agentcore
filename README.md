@@ -10,7 +10,7 @@ What makes this different from general natural-language-to-SQL solutions is the 
 
 ![Data-residency chatbot · AWS architecture (ap-south-1, Mumbai)](docs/architecture.png)
 
-Everything runs inside `ap-south-1` (Mumbai). The only component outside the Region is the user's browser, and it only ever receives the final natural-language answer — never raw program data. No CloudFront or other global services anywhere; Bedrock is invoked in-region with a bare ON_DEMAND `modelId`.
+Everything runs inside `ap-south-1` (Mumbai). The only component outside the Region is the user's browser, and it only ever receives the final natural-language answer — never raw program data. No CloudFront distribution or other global data-path services in the program-data flow; Bedrock is invoked in-region with a bare ON_DEMAND `modelId`. The one global *configuration* resource is the AWS WAF web ACL that fronts the Amplify UI: Amplify's firewall integration requires it in the global (CloudFront) scope. It contains firewall rules only — no program data is stored or processed in it (see [Data residency & the Amplify firewall](DEPLOYMENT.md#data-residency--amplify)).
 
 > **Note on the transport:** the system supports two entry points behind API Gateway. The **REST API** (`POST /chat`, request/response) is the default the demo deploy wires up and what the UI calls out of the box. A **WebSocket API** (`wss://`) is the production transport — deploy it with `deploy.py --with-websocket`. Every other box (Agent_Lambda, Bedrock, AgentCore Gateway/Memory, Tool_Lambda, Aurora, Secrets Manager) is identical for both.
 
@@ -77,7 +77,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide (IAM policy, prerequisites
 
 ### End-to-end steps (numbered to match the diagram)
 
-1. **Load UI** — the user opens the dashboard over HTTPS; AWS Amplify serves the static page (charts + chat box).
+1. **Load UI** — the user opens the dashboard over HTTPS; AWS WAF (the Amplify Firewall integration) inspects the request — rate-limiting floods and blocking known-bad IPs and common exploits — before AWS Amplify serves the static page (charts + chat box).
 2. **Ask** — the browser `fetch()`-POSTs the plain-English question to the API Gateway endpoint (`POST /chat`).
 3. **Route** — API Gateway invokes the Agent_Lambda (AWS_PROXY) — the Strands agent that reasons over the question.
 4. **Reason** — the agent calls Amazon Bedrock (in-region ON_DEMAND) over the Converse tool-use loop; the model decides *which* tool to call and with what parameters.
@@ -95,6 +95,7 @@ A user types a plain-English question in a browser; the system answers it from t
 
 ## The components (who does what)
 
+- **AWS WAF (web ACL on the Amplify app)** — the firewall in front of the dashboard. Every request for the UI is inspected first: a rate-based rule throttles floods per client IP, and AWS-managed rule sets block known-bad IPs, common exploits (XSS, LFI), and known malicious inputs. Amplify's firewall integration requires this web ACL in the global (CloudFront) scope — it is firewall *configuration* only and carries no program data (see [Data residency & the Amplify firewall](DEPLOYMENT.md#data-residency--amplify)).
 - **Browser UI (AWS Amplify)** — the dashboard with charts + a chat box. Static page, hosted in-region.
 - **API Gateway (REST API)** — the front door. The browser POSTs the question here.
 - **Agent_Lambda (the "brain")** — runs a Strands AI agent. It interprets the question, decides what data to fetch, and writes the final natural-language answer.
@@ -119,8 +120,8 @@ A user types a plain-English question in a browser; the system answers it from t
 
 ## The three messages that matter
 
-- **Data residency** — Every box (database, AI inference, APIs, hosting) is in Mumbai (`ap-south-1`). The AI model is invoked in-region on-demand, never through a cross-region inference profile. The only component outside the Region is the user's browser, and it only ever receives the final answer text — never raw data. No CloudFront (a global service) anywhere.
-- **Security** — The database is private (no public access). The agent can't run arbitrary SQL — it can only call 4 read-only tools through an authenticated gateway, and every query is built from a validated whitelist, so SQL injection and writes are impossible. Credentials live in Secrets Manager, never in code or logs.
+- **Data residency** — Every box (database, AI inference, APIs, hosting) is in Mumbai (`ap-south-1`). The AI model is invoked in-region on-demand, never through a cross-region inference profile. The only component outside the Region is the user's browser, and it only ever receives the final answer text — never raw data. No CloudFront distribution in the stack; the sole global *configuration* resource is the WAF web ACL protecting the UI (required by Amplify's firewall integration; firewall rules only, no program data).
+- **Security** — The public entry point (the Amplify-hosted UI) sits behind an AWS WAF web ACL (rate limiting + AWS managed rules against known-bad IPs, common exploits, and malicious inputs). The database is private (no public access). The agent can't run arbitrary SQL — it can only call 4 read-only tools through an authenticated gateway, and every query is built from a validated whitelist, so SQL injection and writes are impossible. Credentials live in Secrets Manager, never in code or logs.
 - **No hallucination** — Every number in an answer comes from a live database query. If the data can't answer (e.g. weather, or a field we don't have), the bot says so instead of guessing.
 
 ## If someone asks "why not just ChatGPT on the data?"
@@ -134,12 +135,12 @@ Counts, totals, breakdowns by any dimension (state, bank, discom, gender, catego
 The architecture flow, end to end:
 
 ```
-Browser → Amplify → API Gateway (REST) → Agent_Lambda → Bedrock / Memory / Gateway → Tool_Lambda → Aurora
+Browser → AWS WAF → Amplify → API Gateway (REST) → Agent_Lambda → Bedrock / Memory / Gateway → Tool_Lambda → Aurora
 ```
 
 ## Request workflow (step by step)
 
-1. Ask (browser). The user types a question in the Amplify-hosted page; JavaScript `fetch()`-POSTs `{question, sessionId}` to `POST /chat`. `sessionId` keeps follow-ups in one conversation.
+1. Ask (browser). The user types a question in the Amplify-hosted page (served through the AWS WAF firewall attached to the Amplify app); JavaScript `fetch()`-POSTs `{question, sessionId}` to `POST /chat`. `sessionId` keeps follow-ups in one conversation.
 2. Front door (API Gateway REST). `POST /chat` is an `AWS_PROXY` integration straight to Agent_Lambda (`OPTIONS /chat` handles CORS preflight).
 3. Agent_Lambda (`src/agent/handler.py`). Detects the HTTP shape and runs one turn. `residency_guard(MODEL_ID)` (cold start) hard-fails on any cross-region inference-profile id (`us.*`/`eu.*`/`ap.*`/`apac.*`/`jp.*`/`au.*`/`global.*`), guaranteeing in-region inference. The guard is model-agnostic — it validates the ID format regardless of which foundation model you configure.
 4. Recall (AgentCore Memory). `memory.load()` folds the prior turns for this session into the system prompt, so follow-ups have context.
