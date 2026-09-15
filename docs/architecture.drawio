@@ -4,8 +4,8 @@
     <root>
       <mxCell id="0" />
       <mxCell id="1" parent="0" />
-      <mxCell id="title" value="PM Surya Ghar — MNRE NLP Chatbot Architecture (ap-south-1)" style="text;html=0;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="1">
-        <mxGeometry x="300" y="10" width="900" height="30" as="geometry" />
+      <mxCell id="title" value="Natural-Language Processing Chatbot with Regional Data Sovereignty — Amazon Bedrock AgentCore" style="text;html=0;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="1">
+        <mxGeometry x="140" y="10" width="1220" height="30" as="geometry" />
       </mxCell>
       <mxCell id="subtitle" value="All components in ap-south-1 (Mumbai) | In-region ON_DEMAND inference | AWS WAF-protected UI | Data residency compliant" style="text;html=0;align=center;verticalAlign=middle;fontSize=11;fontColor=#5A6B86;" vertex="1" parent="1">
         <mxGeometry x="300" y="40" width="900" height="22" as="geometry" />
