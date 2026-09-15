@@ -35,8 +35,11 @@ is the manual checklist and the rationale.
 ## IAM / permissions to run the deploy
 The deploying identity needs permissions across: ec2 (VPC), rds, secretsmanager,
 iam (create roles + inline policies), lambda, ecr, dynamodb, apigateway,
-apigatewayv2, amplify, s3, bedrock, and bedrock-agentcore(-control). See
-DEPLOYMENT.md for the consolidated policy.
+apigatewayv2, amplify, s3, wafv2, bedrock, and bedrock-agentcore(-control). See
+DEPLOYMENT.md for the consolidated policy. Note: the `wafv2` calls for the
+Amplify firewall run against `us-east-1` (Amplify requires the web ACL in the
+global CloudFront scope), so the policy must not be region-pinned to
+`ap-south-1` for those actions.
 
 ## Tooling
 - `finch` installed and `finch vm start` run (builds the Agent_Lambda image).

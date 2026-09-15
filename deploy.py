@@ -71,6 +71,8 @@ STEPS: list[tuple[str, str, object]] = [
        lambda: subprocess.run(["uv", "run", "python", "infra/provision_rest_api.py"], check=True, cwd=HERE)),
     _s("deploy_amplify", "host UI on Amplify (injects REST URL)",
        lambda: subprocess.run(["uv", "run", "python", "infra/deploy_amplify.py"], check=True, cwd=HERE)),
+    _s("provision_waf", "AWS WAF web ACL protecting the Amplify UI (Firewall)",
+       lambda: subprocess.run(["uv", "run", "python", "infra/provision_waf.py"], check=True, cwd=HERE)),
 ]
 
 # Optional production WebSocket transport (inserted before deploy_amplify when requested).

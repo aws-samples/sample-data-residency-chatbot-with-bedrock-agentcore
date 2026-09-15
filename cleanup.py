@@ -13,10 +13,11 @@ On start it asks which AWS account to clean and verifies your active credentials
 resolve to that account (aborting on mismatch), so you never destroy the wrong
 account's stack. The region is always ap-south-1 (Mumbai).
 
-This is DESTRUCTIVE. It removes the VPC, Aurora, Lambdas, ECR repo, Gateway,
-Memory, APIs, Amplify app, IAM roles, DynamoDB table, and read-only DB secret
-for this project. CloudWatch log groups are kept (cheap; useful for post-mortem).
-The demo-data S3 bucket is kept unless --delete-bucket is passed.
+This is DESTRUCTIVE. It removes the WAF web ACL (Amplify firewall), the VPC,
+Aurora, Lambdas, ECR repo, Gateway, Memory, APIs, Amplify app, IAM roles,
+DynamoDB table, and read-only DB secret for this project. CloudWatch log groups
+are kept (cheap; useful for post-mortem). The demo-data S3 bucket is kept
+unless --delete-bucket is passed.
 """
 from __future__ import annotations
 
@@ -64,6 +65,81 @@ def confirm_target_account(supplied: str | None) -> None:
             f"target account (e.g. set AWS_PROFILE) and re-run."
         )
     print(f"Confirmed: cleaning up account {target} in {REGION}.")
+
+
+def cleanup_waf() -> None:
+    """Disassociate + delete the Amplify firewall web ACL.
+
+    The web ACL lives in us-east-1 with CLOUDFRONT scope (required by Amplify
+    Hosting's firewall integration — regional ACLs are not compatible). It must
+    be disassociated from the app before it can be deleted, so this runs BEFORE
+    cleanup_amplify().
+    """
+    waf_region = ids.get("waf_region", "us-east-1")
+    waf_scope = ids.get("waf_scope", "CLOUDFRONT")
+    acl_name = ids.get("waf_web_acl_name", f"{PROJECT}-webacl")
+    wafv2 = boto3.client("wafv2", region_name=waf_region)
+
+    app_id = ids.get("amplify_app_id")
+    if app_id:
+        app_arn = f"arn:aws:amplify:{REGION}:{ACCOUNT}:apps/{app_id}"
+        _try(f"waf disassociate from app {app_id}",
+             lambda: wafv2.disassociate_web_acl(ResourceArn=app_arn))
+        # Wait for the disassociation to settle so delete_web_acl can succeed.
+        amp = boto3.client("amplify", region_name=REGION)
+        for _ in range(30):
+            try:
+                cfg = amp.get_app(appId=app_id)["app"].get("wafConfiguration") or {}
+                if not cfg.get("webAclArn") or cfg.get("wafStatus") not in (
+                        "DISASSOCIATING", "ASSOCIATION_SUCCESS"):
+                    break
+            except Exception:  # noqa: BLE001
+                break
+            time.sleep(10)
+
+    # Find the ACL by name (survives a lost network_ids.json) and delete it.
+    acl = None
+    try:
+        marker = None
+        while acl is None:
+            kwargs = {"Scope": waf_scope, "Limit": 100}
+            if marker:
+                kwargs["NextMarker"] = marker
+            resp = wafv2.list_web_acls(**kwargs)
+            for candidate in resp.get("WebACLs", []):
+                if candidate.get("Name") == acl_name:
+                    acl = candidate
+                    break
+            marker = resp.get("NextMarker")
+            if not marker or not resp.get("WebACLs"):
+                break
+    except Exception as e:  # noqa: BLE001
+        print(f"[skip] waf list: {type(e).__name__}: {e}")
+        return
+    if not acl:
+        print(f"[skip] waf web ACL {acl_name}: not found")
+        return
+
+    # Deletion needs a fresh LockToken; retry while the association drains.
+    for attempt in range(6):
+        try:
+            token = wafv2.get_web_acl(
+                Name=acl_name, Scope=waf_scope, Id=acl["Id"])["LockToken"]
+            wafv2.delete_web_acl(
+                Name=acl_name, Scope=waf_scope, Id=acl["Id"], LockToken=token)
+            print(f"[del] waf web ACL {acl_name}")
+            return
+        except ClientError as e:
+            code = e.response["Error"].get("Code", "")
+            if code in ("WAFAssociatedItemException",
+                        "WAFOptimisticLockException") and attempt < 5:
+                time.sleep(15)
+                continue
+            print(f"[skip] waf web ACL {acl_name}: {code}")
+            return
+        except Exception as e:  # noqa: BLE001
+            print(f"[skip] waf web ACL {acl_name}: {type(e).__name__}: {e}")
+            return
 
 
 def cleanup_amplify() -> None:
@@ -240,13 +316,14 @@ def main() -> None:
     confirm_target_account(args.account)
 
     print(f"\nRegion {REGION}  Project {PROJECT}")
-    print("This DELETES the chatbot stack (VPC, Aurora, Lambdas, ECR, Gateway, "
-          "Memory, APIs, Amplify, IAM, DynamoDB, DB secret).")
+    print("This DELETES the chatbot stack (WAF web ACL, VPC, Aurora, Lambdas, "
+          "ECR, Gateway, Memory, APIs, Amplify, IAM, DynamoDB, DB secret).")
     if not args.yes:
         if input("Type 'delete' to proceed: ").strip().lower() != "delete":
             print("aborted.")
             return
 
+    cleanup_waf()
     cleanup_amplify()
     cleanup_apis()
     cleanup_agentcore()

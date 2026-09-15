@@ -153,6 +153,7 @@ The orchestrator runs these steps in order (each idempotent; ids written to
 | 11 | provision_rest_api | REST API `POST /chat` (demo transport) |
 | (opt) | provision_websocket | WebSocket API (production transport) — with `--with-websocket` |
 | 12 | deploy_amplify | host UI on Amplify, inject the REST URL into it |
+| 13 | provision_waf | AWS WAF web ACL (Amplify Firewall) attached to the Amplify app |
 
 When it finishes, `infra/network_ids.json` holds every resource id. The live
 dashboard is `amplify_url`; the chat endpoint is `rest_api_url`.
@@ -215,8 +216,9 @@ uv run python cleanup.py --account 123456789012 --yes --delete-bucket
 
 Like `deploy.py`, it first asks which account to clean and verifies your active
 credentials resolve to it (aborting on mismatch). Best-effort reverse cleanup
-(VPC, Aurora, Lambdas, ECR, Gateway, Memory, APIs, Amplify, IAM, DynamoDB, DB
-secret). The demo-data S3 bucket is kept unless `--delete-bucket` is passed;
+(WAF web ACL, VPC, Aurora, Lambdas, ECR, Gateway, Memory, APIs, Amplify, IAM,
+DynamoDB, DB secret — the web ACL is disassociated from the app first, then
+deleted). The demo-data S3 bucket is kept unless `--delete-bucket` is passed;
 CloudWatch log groups are kept (cheap, useful for post-mortem). The local
 `network_ids.json` is removed at the end (pass `--keep-state` to retain it).
 
@@ -224,13 +226,32 @@ CloudWatch log groups are kept (cheap, useful for post-mortem). The local
 
 Amplify hosts only the static UI shell (HTML/JS). All program data flows from the
 browser to the regional `ap-south-1` API endpoint and back; no data or inference
-leaves India. There is no CloudFront (a global service) anywhere in the stack.
+leaves India. There is no CloudFront distribution anywhere in the stack.
+
+**The Amplify firewall (AWS WAF).** The Amplify app is protected by an AWS WAF
+web ACL (`residency-chatbot-webacl`): a rate-based rule (2000 requests / 5 min
+per client IP) plus the AWS managed rule groups
+`AWSManagedRulesAmazonIpReputationList`, `AWSManagedRulesCommonRuleSet`, and
+`AWSManagedRulesKnownBadInputsRuleSet`. One nuance to be aware of: Amplify
+Hosting's firewall integration [requires the web ACL to be created in the
+global (CloudFront) scope](https://docs.aws.amazon.com/amplify/latest/userguide/amplify-waf-configuration.html),
+which lives in `us-east-1` — regional web ACLs are not compatible with Amplify.
+This does not change the data-residency posture: the web ACL is firewall
+*configuration* (rules and counters), not a data store; it holds no program
+data, and program data continues to flow exclusively between the browser and
+the `ap-south-1` API. If your governance forbids even global configuration
+resources, disable the `provision_waf` step and front the UI with your own
+in-region proxy instead.
 
 ## Authorizer gap (production)
 
 The REST and WebSocket endpoints are open (no authorizer) for the demo. For
 production, add an API Gateway authorizer (Cognito / Lambda authorizer / IAM) in
 front of `POST /chat` (or the `sendMessage` route) before exposing the endpoint.
+The WAF web ACL added by `provision_waf` protects the Amplify-hosted UI, not
+the API: for API-side WAF protection, associate a separate **regional**
+(`ap-south-1`) web ACL with the API Gateway REST API stage as part of your
+production hardening.
 
 ## IAM policy for the deploying identity
 
@@ -277,6 +298,7 @@ these services (scope down as your governance requires):
         "lambda:*", "ecr:*", "logs:*",
         "apigateway:*",
         "amplify:*", "s3:*",
+        "wafv2:*",
         "bedrock:ListFoundationModels", "bedrock:InvokeModel",
         "bedrock-agentcore:*",
         "sts:GetCallerIdentity"
@@ -291,7 +313,11 @@ Replace `<ACCOUNT_ID>` with your 12-digit account id. `iam:PassRole` is
 restricted to the project's `residency-chatbot-*` roles and the services they are
 passed to; for the tightest posture, also scope the `ServiceProvisioning`
 statement to `residency-chatbot-*` ARNs per service, as done in
-`deploy/codebuild-deploy.yaml`.
+`deploy/codebuild-deploy.yaml`. Note `wafv2:*` is exercised in `us-east-1`
+(Amplify's firewall integration requires the web ACL in the global CloudFront
+scope), so don't pin this policy to `ap-south-1` with a region condition —
+`deploy/codebuild-deploy.yaml` shows the scoped-down equivalent
+(`WafForAmplifyUi` / `WafListWebAcls` statements).
 
 ## Documentation
 
