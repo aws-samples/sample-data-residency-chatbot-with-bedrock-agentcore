@@ -139,9 +139,11 @@ def ensure_web_acl() -> dict:
         Name=WEB_ACL_NAME,
         Scope=WAF_SCOPE,
         DefaultAction={"Allow": {}},
+        # NOTE: WAF descriptions only allow [\w+=:#@/\-,.] plus spaces — no
+        # parentheses or semicolons, or CreateWebACL fails ValidationException.
         Description=(
             "Firewall for the residency-chatbot Amplify UI. CloudFront scope "
-            "(us-east-1) is REQUIRED by Amplify Hosting; configuration only, "
+            "us-east-1 is REQUIRED by Amplify Hosting. Configuration only, "
             "no program data."
         ),
         Rules=RULES,

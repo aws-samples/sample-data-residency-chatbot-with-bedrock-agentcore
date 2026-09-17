@@ -102,7 +102,36 @@ def ensure_ecr_repo() -> str:
         )
         uri = resp["repository"]["repositoryUri"]
         print(f"[create] ECR repo: {uri}")
+    _ensure_lambda_pull_policy()
     return uri
+
+
+def _ensure_lambda_pull_policy() -> None:
+    """Grant the Lambda service permission to pull this repo's images.
+
+    Container-image Lambdas pull from ECR as the Lambda SERVICE principal, so
+    the repository itself must allow it — an IAM role policy is not enough.
+    The console adds this repository policy silently; programmatic deploys
+    must set it explicitly or CreateFunction fails with "Lambda does not have
+    permission to access the ECR image". Idempotent (overwrites in place),
+    and scoped to this account's residency-chatbot-* functions.
+    """
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Sid": "LambdaECRImageRetrievalPolicy",
+            "Effect": "Allow",
+            "Principal": {"Service": "lambda.amazonaws.com"},
+            "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+            "Condition": {"StringLike": {
+                "aws:sourceArn":
+                    f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:{PROJECT}-*",
+            }},
+        }],
+    }
+    ecr.set_repository_policy(
+        repositoryName=ECR_REPO, policyText=json.dumps(policy))
+    print("[policy] ECR repo allows lambda.amazonaws.com image pulls")
 
 
 def ecr_login() -> str:
@@ -233,7 +262,7 @@ def deploy(ids: dict, image_uri: str) -> str:
         _wait_updated()
     except lam.exceptions.ResourceNotFoundException:
         print(f"[create] {FUNCTION_NAME} (PackageType=Image, OUT of VPC)")
-        for attempt in range(6):
+        for attempt in range(10):
             try:
                 lam.create_function(
                     FunctionName=FUNCTION_NAME,
@@ -248,9 +277,15 @@ def deploy(ids: dict, image_uri: str) -> str:
                 )
                 break
             except lam.exceptions.InvalidParameterValueException as e:
-                if "cannot be assumed" in str(e) and attempt < 5:
+                msg = str(e)
+                # IAM propagation right after role creation surfaces either as
+                # "role ... cannot be assumed" or, via Lambda's KMS-grant path,
+                # as "ARN does not refer to a valid principal". Both are
+                # transient; retry with patience (fast runners hit this more).
+                if ("cannot be assumed" in msg
+                        or "valid principal" in msg) and attempt < 9:
                     print(f"  role not ready, retrying ({attempt + 1})...")
-                    time.sleep(5)
+                    time.sleep(10)
                     continue
                 raise
         _wait_active()

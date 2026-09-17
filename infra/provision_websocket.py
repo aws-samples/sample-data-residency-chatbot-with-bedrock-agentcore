@@ -193,7 +193,7 @@ def _deploy_helper(fn_name: str, source: str, role_arn: str, ids: dict) -> str:
         lam.get_waiter("function_updated_v2").wait(FunctionName=fn_name)
     except lam.exceptions.ResourceNotFoundException:
         print(f"[create] {fn_name}")
-        for attempt in range(6):
+        for attempt in range(10):
             try:
                 lam.create_function(
                     FunctionName=fn_name,
@@ -208,9 +208,15 @@ def _deploy_helper(fn_name: str, source: str, role_arn: str, ids: dict) -> str:
                 )
                 break
             except lam.exceptions.InvalidParameterValueException as e:
-                if "cannot be assumed" in str(e) and attempt < 5:
+                msg = str(e)
+                # IAM propagation right after role creation surfaces either as
+                # "role ... cannot be assumed" or, via Lambda's KMS-grant path,
+                # as "ARN does not refer to a valid principal". Both are
+                # transient; retry with patience (fast runners hit this more).
+                if ("cannot be assumed" in msg
+                        or "valid principal" in msg) and attempt < 9:
                     print(f"  role not ready, retrying ({attempt + 1})...")
-                    time.sleep(5)
+                    time.sleep(10)
                     continue
                 raise
         lam.get_waiter("function_active_v2").wait(FunctionName=fn_name)
