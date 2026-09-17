@@ -80,7 +80,8 @@ def cleanup_waf() -> None:
     acl_name = ids.get("waf_web_acl_name", f"{PROJECT}-webacl")
     wafv2 = boto3.client("wafv2", region_name=waf_region)
 
-    app_id = ids.get("amplify_app_id")
+    # State-less fallback: discover the app by name when ids are missing.
+    app_id = ids.get("amplify_app_id") or _find_amplify_app_id()
     if app_id:
         app_arn = f"arn:aws:amplify:{REGION}:{ACCOUNT}:apps/{app_id}"
         _try(f"waf disassociate from app {app_id}",
@@ -142,23 +143,65 @@ def cleanup_waf() -> None:
             return
 
 
+def _find_amplify_app_id() -> str | None:
+    """Locate the app by its well-known name when local state is missing."""
+    amp = boto3.client("amplify", region_name=REGION)
+    token = None
+    try:
+        while True:
+            kwargs = {"maxResults": 100}
+            if token:
+                kwargs["nextToken"] = token
+            resp = amp.list_apps(**kwargs)
+            for app in resp.get("apps", []):
+                if app.get("name") == f"{PROJECT}-ui":
+                    return app["appId"]
+            token = resp.get("nextToken")
+            if not token:
+                return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def cleanup_amplify() -> None:
-    if not ids.get("amplify_app_id"):
+    # STATE-LESS FALLBACK: the one-click cleanup runs from a fresh bundle
+    # without network_ids.json, so discover by name when the id is absent.
+    app_id = ids.get("amplify_app_id") or _find_amplify_app_id()
+    if not app_id:
+        print("[skip] amplify app: not found")
         return
     amp = boto3.client("amplify", region_name=REGION)
-    _try(f"amplify app {ids['amplify_app_id']}",
-         lambda: amp.delete_app(appId=ids["amplify_app_id"]))
+    _try(f"amplify app {app_id}", lambda: amp.delete_app(appId=app_id))
 
 
 def cleanup_apis() -> None:
-    if ids.get("rest_api_id"):
-        apigw = boto3.client("apigateway", region_name=REGION)
-        _try(f"REST API {ids['rest_api_id']}",
-             lambda: apigw.delete_rest_api(restApiId=ids["rest_api_id"]))
-    if ids.get("ws_api_id"):
-        apigw2 = boto3.client("apigatewayv2", region_name=REGION)
-        _try(f"WebSocket API {ids['ws_api_id']}",
-             lambda: apigw2.delete_api(ApiId=ids["ws_api_id"]))
+    apigw = boto3.client("apigateway", region_name=REGION)
+    rest_id = ids.get("rest_api_id")
+    if not rest_id:
+        # Discover by well-known name (stateless one-click cleanup).
+        try:
+            for item in apigw.get_rest_apis(limit=500).get("items", []):
+                if item.get("name") == f"{PROJECT}-rest":
+                    rest_id = item["id"]
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+    if rest_id:
+        _try(f"REST API {rest_id}",
+             lambda: apigw.delete_rest_api(restApiId=rest_id))
+    apigw2 = boto3.client("apigatewayv2", region_name=REGION)
+    ws_id = ids.get("ws_api_id")
+    if not ws_id:
+        try:
+            for api in apigw2.get_apis(MaxResults="100").get("Items", []):
+                if api.get("Name") == f"{PROJECT}-ws":
+                    ws_id = api["ApiId"]
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+    if ws_id:
+        _try(f"WebSocket API {ws_id}",
+             lambda: apigw2.delete_api(ApiId=ws_id))
 
 
 def cleanup_lambdas() -> None:
@@ -245,6 +288,18 @@ def cleanup_network() -> None:
     ec2 = boto3.client("ec2", region_name=REGION)
     vpc_id = ids.get("vpc_id")
     if not vpc_id:
+        # STATE-LESS FALLBACK: discover the project VPC by its Name tag
+        # (the one-click cleanup runs from a fresh bundle without
+        # network_ids.json).
+        try:
+            vpcs = ec2.describe_vpcs(Filters=[
+                {"Name": "tag:Name", "Values": [f"{PROJECT}-vpc"]},
+            ])["Vpcs"]
+            vpc_id = vpcs[0]["VpcId"] if vpcs else None
+        except Exception:  # noqa: BLE001
+            vpc_id = None
+    if not vpc_id:
+        print("[skip] vpc: not found")
         return
     # VPC endpoints
     eps = ec2.describe_vpc_endpoints(
@@ -253,12 +308,44 @@ def cleanup_network() -> None:
         _try("vpc endpoints",
              lambda: ec2.delete_vpc_endpoints(VpcEndpointIds=[e["VpcEndpointId"] for e in eps]))
         time.sleep(5)
-    # subnets
-    for sid in ids.get("private_subnet_ids", []):
-        _try(f"subnet {sid}", lambda sid=sid: ec2.delete_subnet(SubnetId=sid))
-    # route table (disassociate first)
-    rt = ids.get("private_route_table_id")
-    if rt:
+    # Orphaned Lambda-managed ENIs keep subnets undeletable for many minutes
+    # after the in-VPC functions are gone; delete any 'available' ones now.
+    for _ in range(12):
+        enis = ec2.describe_network_interfaces(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["NetworkInterfaces"]
+        if not enis:
+            break
+        for eni in enis:
+            if eni.get("Status") == "available":
+                _try(f"eni {eni['NetworkInterfaceId']}",
+                     lambda eid=eni["NetworkInterfaceId"]:
+                     ec2.delete_network_interface(NetworkInterfaceId=eid))
+        if all(e.get("Status") != "available" for e in enis):
+            time.sleep(10)  # in-use ENIs detach asynchronously; wait and re-check
+        else:
+            time.sleep(2)
+    # subnets (from state, else discovered from the VPC)
+    subnet_ids = ids.get("private_subnet_ids") or [
+        s["SubnetId"] for s in ec2.describe_subnets(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]]
+    for sid in subnet_ids:
+        for _ in range(6):
+            try:
+                ec2.delete_subnet(SubnetId=sid)
+                print(f"[del] subnet {sid}")
+                break
+            except ClientError as e:
+                if "DependencyViolation" in str(e):
+                    time.sleep(10)
+                    continue
+                print(f"[skip] subnet {sid}: {e.response['Error'].get('Code')}")
+                break
+    # route tables (from state, else discovered; skip the main table)
+    rts = [ids["private_route_table_id"]] if ids.get("private_route_table_id") else [
+        rt["RouteTableId"] for rt in ec2.describe_route_tables(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["RouteTables"]
+        if not any(a.get("Main") for a in rt.get("Associations", []))]
+    for rt in rts:
         try:
             assoc = ec2.describe_route_tables(RouteTableIds=[rt])["RouteTables"][0].get("Associations", [])
             for a in assoc:
@@ -266,22 +353,25 @@ def cleanup_network() -> None:
                     ec2.disassociate_route_table(AssociationId=a["RouteTableAssociationId"])
         except Exception:  # noqa: BLE001
             pass
-        _try(f"route table {rt}", lambda: ec2.delete_route_table(RouteTableId=rt))
-    # security groups (retry — dependencies clear asynchronously)
-    for key in ("aurora_sg", "lambda_sg", "vpce_sg"):
-        sg = ids.get(key)
-        if sg:
-            for _ in range(6):
-                try:
-                    ec2.delete_security_group(GroupId=sg)
-                    print(f"[del] sg {sg}")
-                    break
-                except ClientError as e:
-                    if "DependencyViolation" in str(e):
-                        time.sleep(10)
-                        continue
-                    print(f"[skip] sg {sg}: {e.response['Error'].get('Code')}")
-                    break
+        _try(f"route table {rt}", lambda rt=rt: ec2.delete_route_table(RouteTableId=rt))
+    # security groups (from state, else discovered; retry — dependencies clear
+    # asynchronously)
+    sgs = [ids[k] for k in ("aurora_sg", "lambda_sg", "vpce_sg") if ids.get(k)] or [
+        g["GroupId"] for g in ec2.describe_security_groups(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["SecurityGroups"]
+        if g.get("GroupName") != "default"]
+    for sg in sgs:
+        for _ in range(6):
+            try:
+                ec2.delete_security_group(GroupId=sg)
+                print(f"[del] sg {sg}")
+                break
+            except ClientError as e:
+                if "DependencyViolation" in str(e):
+                    time.sleep(10)
+                    continue
+                print(f"[skip] sg {sg}: {e.response['Error'].get('Code')}")
+                break
     _try(f"vpc {vpc_id}", lambda: ec2.delete_vpc(VpcId=vpc_id))
 
 

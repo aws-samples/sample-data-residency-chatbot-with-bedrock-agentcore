@@ -119,24 +119,36 @@ def ensure_options_cors(api_id: str, resource_id: str) -> None:
         restApiId=api_id, resourceId=resource_id, httpMethod="OPTIONS",
         type="MOCK", requestTemplates={"application/json": '{"statusCode": 200}'},
     )
-    apigw.put_method_response(
-        restApiId=api_id, resourceId=resource_id, httpMethod="OPTIONS",
-        statusCode="200",
-        responseParameters={
-            "method.response.header.Access-Control-Allow-Headers": True,
-            "method.response.header.Access-Control-Allow-Methods": True,
-            "method.response.header.Access-Control-Allow-Origin": True,
-        },
-    )
-    apigw.put_integration_response(
-        restApiId=api_id, resourceId=resource_id, httpMethod="OPTIONS",
-        statusCode="200",
-        responseParameters={
-            "method.response.header.Access-Control-Allow-Headers": "'content-type'",
-            "method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
-            "method.response.header.Access-Control-Allow-Origin": "'*'",
-        },
-    )
+    # put_method_response / put_integration_response are NOT overwrite-PUTs:
+    # re-running against an existing method raises ConflictException
+    # ("Response already exists for this resource"). Tolerate it so the step
+    # stays idempotent on resumed/repeated deploys.
+    try:
+        apigw.put_method_response(
+            restApiId=api_id, resourceId=resource_id, httpMethod="OPTIONS",
+            statusCode="200",
+            responseParameters={
+                "method.response.header.Access-Control-Allow-Headers": True,
+                "method.response.header.Access-Control-Allow-Methods": True,
+                "method.response.header.Access-Control-Allow-Origin": True,
+            },
+        )
+    except ClientError as e:
+        if "ConflictException" not in str(e):
+            raise
+    try:
+        apigw.put_integration_response(
+            restApiId=api_id, resourceId=resource_id, httpMethod="OPTIONS",
+            statusCode="200",
+            responseParameters={
+                "method.response.header.Access-Control-Allow-Headers": "'content-type'",
+                "method.response.header.Access-Control-Allow-Methods": "'POST,OPTIONS'",
+                "method.response.header.Access-Control-Allow-Origin": "'*'",
+            },
+        )
+    except ClientError as e:
+        if "ConflictException" not in str(e):
+            raise
     print("[ok] OPTIONS /chat -> MOCK CORS")
 
 

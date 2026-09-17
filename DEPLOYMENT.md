@@ -299,6 +299,7 @@ these services (scope down as your governance requires):
         "apigateway:*",
         "amplify:*", "s3:*",
         "wafv2:*",
+        "kms:DescribeKey", "kms:CreateGrant",
         "bedrock:ListFoundationModels", "bedrock:InvokeModel",
         "bedrock-agentcore:*",
         "sts:GetCallerIdentity"
