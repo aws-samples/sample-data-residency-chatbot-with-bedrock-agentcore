@@ -275,7 +275,18 @@ def cleanup_agentcore() -> None:
             _try(f"gateway target {tid}",
                  lambda tid=tid: acc.delete_gateway_target(gatewayIdentifier=gid, targetId=tid))
         if tids:
-            time.sleep(3)
+            # Target deletion is asynchronous; DeleteGateway is rejected with a
+            # ValidationException while any target still exists. Poll until
+            # the target list drains (a fixed sleep raced and leaked gateways).
+            for _ in range(30):
+                try:
+                    remaining = acc.list_gateway_targets(
+                        gatewayIdentifier=gid).get("items", [])
+                except Exception:  # noqa: BLE001
+                    break
+                if not remaining:
+                    break
+                time.sleep(5)
         _try(f"gateway {gid}", lambda: acc.delete_gateway(gatewayIdentifier=gid))
     else:
         print("[skip] gateway: not found")
