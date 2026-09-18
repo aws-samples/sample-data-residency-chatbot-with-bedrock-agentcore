@@ -350,7 +350,6 @@ Resources:
                   - wafv2:DeleteWebACL
                   - wafv2:TagResource
                   - wafv2:AssociateWebACL
-                  - wafv2:DisassociateWebACL
                   - wafv2:PutPermissionPolicy
                   - wafv2:GetPermissionPolicy
                   - amplify:AssociateWebACL
@@ -361,6 +360,21 @@ Resources:
                   # authorizes against the managedruleset resource type.
                   - !Sub "arn:aws:wafv2:us-east-1:${AWS::AccountId}:global/managedruleset/*/*"
                   - !Sub "arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/*"
+              - Sid: WafDisassociateForCleanup
+                # wafv2:DisassociateWebACL is evaluated by IAM without a
+                # resource (verified with the IAM policy simulator: any ARN-
+                # scoped statement yields implicitDeny; only Resource "*"
+                # allows it). With the scoped statement above it was denied
+                # during the one-click cleanup, leaving the web ACL
+                # undeletable. Bounded to us-east-1 (home of the CloudFront
+                # WAF scope) since resource-level scoping is unavailable.
+                Effect: Allow
+                Action:
+                  - wafv2:DisassociateWebACL
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: us-east-1
               - Sid: WafListWebAcls
                 # ListWebACLs does not support resource-level scoping; it is
                 # used for the idempotent find-or-create of the web ACL and is
