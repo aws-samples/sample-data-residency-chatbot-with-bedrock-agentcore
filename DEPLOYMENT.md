@@ -218,7 +218,19 @@ Like `deploy.py`, it first asks which account to clean and verifies your active
 credentials resolve to it (aborting on mismatch). Best-effort reverse cleanup
 (WAF web ACL, VPC, Aurora, Lambdas, ECR, Gateway, Memory, APIs, Amplify, IAM,
 DynamoDB, DB secret — the web ACL is disassociated from the app first, then
-deleted). The demo-data S3 bucket is kept unless `--delete-bucket` is passed;
+deleted). It works without `network_ids.json` (the one-click cleanup runs from
+a fresh bundle) by locating resources through their `residency-chatbot-*`
+names and `Project` tags.
+
+> **Dedicated-VPC assumption.** `cleanup.py` deletes the VPC it finds tagged
+> `residency-chatbot-vpc` together with *all* its subnets, route tables, and
+> security groups. It is written for the dedicated VPC this deploy creates. If
+> you adapted the stack to reuse an existing VPC (see
+> [Production considerations](#production-considerations-existing-database)),
+> do **not** run `cleanup_network()` against it — remove the chatbot resources
+> individually instead.
+
+The demo-data S3 bucket is kept unless `--delete-bucket` is passed;
 CloudWatch log groups are kept (cheap, useful for post-mortem). The local
 `network_ids.json` is removed at the end (pass `--keep-state` to retain it).
 
@@ -226,22 +238,36 @@ CloudWatch log groups are kept (cheap, useful for post-mortem). The local
 
 Amplify hosts only the static UI shell (HTML/JS). All program data flows from the
 browser to the regional `ap-south-1` API endpoint and back; no data or inference
-leaves India. There is no CloudFront distribution anywhere in the stack.
+leaves India. There is no customer-managed CloudFront distribution in the stack
+(Amplify Hosting serves the static shell through its own managed CDN).
 
 **The Amplify firewall (AWS WAF).** The Amplify app is protected by an AWS WAF
 web ACL (`residency-chatbot-webacl`): a rate-based rule (2000 requests / 5 min
 per client IP) plus the AWS managed rule groups
 `AWSManagedRulesAmazonIpReputationList`, `AWSManagedRulesCommonRuleSet`, and
-`AWSManagedRulesKnownBadInputsRuleSet`. One nuance to be aware of: Amplify
-Hosting's firewall integration [requires the web ACL to be created in the
-global (CloudFront) scope](https://docs.aws.amazon.com/amplify/latest/userguide/amplify-waf-configuration.html),
-which lives in `us-east-1` — regional web ACLs are not compatible with Amplify.
-This does not change the data-residency posture: the web ACL is firewall
-*configuration* (rules and counters), not a data store; it holds no program
-data, and program data continues to flow exclusively between the browser and
-the `ap-south-1` API. If your governance forbids even global configuration
-resources, disable the `provision_waf` step and front the UI with your own
-in-region proxy instead.
+`AWSManagedRulesKnownBadInputsRuleSet`. Things to know:
+
+- *Scope.* Amplify Hosting's firewall integration [requires the web ACL in the
+  global (CloudFront) scope](https://docs.aws.amazon.com/amplify/latest/userguide/amplify-waf-configuration.html),
+  which lives in `us-east-1` — regional web ACLs are not compatible with
+  Amplify. The web ACL is firewall *configuration* (rules and aggregate
+  CloudWatch counters), not a program-data store; program data continues to
+  flow exclusively between the browser and the `ap-south-1` API.
+- *Request sampling is off by default.* WAF can retain samples of matched
+  requests (client IP, headers, URI) for up to 3 hours, and for a
+  CloudFront-scope ACL that store is in `us-east-1`. `provision_waf.py` sets
+  `SampledRequestsEnabled=False` so no end-user request data is kept outside
+  the Region. Set `CHATBOT_WAF_SAMPLED_REQUESTS=true` to turn sampling on
+  temporarily while tuning rules.
+- *What it covers.* The web ACL protects the Amplify-hosted UI only. The
+  browser calls `POST /chat` directly; see [Authorizer gap](#authorizer-gap-production)
+  for API-side protection.
+- *Cost.* Roughly USD 9 per month fixed (one web ACL + four rules; the AWS
+  managed rule groups used here carry no extra charge) plus a small
+  per-request fee. See [AWS WAF pricing](https://aws.amazon.com/waf/pricing/).
+- *Opting out.* If your governance forbids even global configuration
+  resources, remove the `provision_waf` step from `deploy.py` and front the UI
+  with your own in-region protection instead.
 
 ## Authorizer gap (production)
 
@@ -293,7 +319,7 @@ these services (scope down as your governance requires):
       "Effect": "Allow",
       "Action": [
         "ec2:*Vpc*", "ec2:*Subnet*", "ec2:*RouteTable*", "ec2:*SecurityGroup*",
-        "ec2:*VpcEndpoint*", "ec2:CreateTags", "ec2:Describe*",
+        "ec2:*VpcEndpoint*", "ec2:DeleteNetworkInterface", "ec2:CreateTags", "ec2:Describe*",
         "rds:*", "secretsmanager:*", "dynamodb:*",
         "lambda:*", "ecr:*", "logs:*",
         "apigateway:*",

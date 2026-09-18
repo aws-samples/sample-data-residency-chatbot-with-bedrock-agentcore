@@ -60,6 +60,14 @@ WAF_SCOPE = "CLOUDFRONT"
 WEB_ACL_NAME = f"{PROJECT}-webacl"
 RATE_LIMIT_PER_5_MIN = 2000          # per client IP, trailing 5-minute window
 
+# RESIDENCY: WAF "sampled requests" retain copies of matched requests (client
+# IP, headers, URI) for up to 3 hours — and for a CloudFront-scope ACL that
+# store is in us-east-1. Off by default so no end-user request data is kept
+# outside the Region; CloudWatch METRICS (aggregate counts only) stay on. Set
+# CHATBOT_WAF_SAMPLED_REQUESTS=true to enable sampling for rule debugging.
+SAMPLED_REQUESTS = os.environ.get("CHATBOT_WAF_SAMPLED_REQUESTS", "").lower() in (
+    "1", "true", "yes")
+
 ASSOCIATE_RETRIES = 20               # fresh-ACL propagation can take minutes
 ASSOCIATE_RETRY_INTERVAL = 15        # seconds
 POLL_TIMEOUT = 900                   # seconds (~15 min) for ASSOCIATION_SUCCESS
@@ -82,7 +90,7 @@ def _managed_rule(priority: int, group_name: str) -> dict:
         },
         "OverrideAction": {"None": {}},
         "VisibilityConfig": {
-            "SampledRequestsEnabled": True,
+            "SampledRequestsEnabled": SAMPLED_REQUESTS,
             "CloudWatchMetricsEnabled": True,
             "MetricName": group_name,
         },
@@ -102,7 +110,7 @@ RULES = [
         },
         "Action": {"Block": {}},
         "VisibilityConfig": {
-            "SampledRequestsEnabled": True,
+            "SampledRequestsEnabled": SAMPLED_REQUESTS,
             "CloudWatchMetricsEnabled": True,
             "MetricName": f"{PROJECT}-rate-limit",
         },
@@ -148,7 +156,7 @@ def ensure_web_acl() -> dict:
         ),
         Rules=RULES,
         VisibilityConfig={
-            "SampledRequestsEnabled": True,
+            "SampledRequestsEnabled": SAMPLED_REQUESTS,
             "CloudWatchMetricsEnabled": True,
             "MetricName": WEB_ACL_NAME,
         },
@@ -243,8 +251,12 @@ def main() -> None:
         print("[assoc] already associated — nothing to do")
     else:
         # Associate when nothing is attached yet, or re-request after a
-        # previous attempt failed (idempotent re-run remediation).
-        if not existing_arn or existing_status == "ASSOCIATION_FAILED":
+        # previous attempt failed / a disassociation was left in progress
+        # (idempotent re-run remediation). Only a live ASSOCIATING state is
+        # left alone to finish on its own.
+        if (not existing_arn
+                or existing_status in ("ASSOCIATION_FAILED", "DISASSOCIATING",
+                                       "DISASSOCIATION_FAILED")):
             associate(web_acl_arn, app_arn)
         status = poll_association(app_id, web_acl_arn)
         if status != "ASSOCIATION_SUCCESS":
