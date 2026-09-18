@@ -202,6 +202,7 @@ Resources:
                   - ec2:DescribeRouteTables
                   - ec2:DescribeSecurityGroups
                   - ec2:DescribeVpcEndpoints
+                  - ec2:DescribeNetworkInterfaces
                   - rds:DescribeDBEngineVersions
                   - bedrock:ListFoundationModels
                   - sts:GetCallerIdentity
@@ -238,6 +239,9 @@ Resources:
                   - ec2:DeleteVpcEndpoints
                   - ec2:ModifyVpcEndpoint
                   - ec2:ModifySubnetAttribute
+                  # cleanup.py deletes orphaned Lambda-managed ENIs (which
+                  # otherwise block subnet deletion for many minutes).
+                  - ec2:DeleteNetworkInterface
                   - ec2:CreateTags
                   - apigateway:GET
                   - apigateway:POST
@@ -285,16 +289,14 @@ Resources:
                 # forward-access session. RDS names these secrets
                 # "rds!cluster-<uuid>", which the ProjectSecrets prefix above
                 # does not cover — without this statement the deploy fails with
-                # "The user isn't authorized to create a secret". The bootstrap
-                # step later reads the same secret to create tables + the
-                # read-only DB user, and cluster deletion removes it.
+                # "The user isn't authorized to create a secret". Create-side
+                # actions only: the deploy role never READS the master secret
+                # (the bootstrap/loader Lambdas do, via their own execution
+                # role), and RDS deletes the secret with the cluster.
                 Effect: Allow
                 Action:
                   - secretsmanager:CreateSecret
                   - secretsmanager:TagResource
-                  - secretsmanager:DescribeSecret
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:DeleteSecret
                 Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:rds!cluster-*"
               - Sid: KmsDescribeForEncryptedAurora
                 # CreateDBCluster with StorageEncrypted=true and
@@ -345,13 +347,10 @@ Resources:
                 Action:
                   - wafv2:CreateWebACL
                   - wafv2:GetWebACL
-                  - wafv2:UpdateWebACL
                   - wafv2:DeleteWebACL
                   - wafv2:TagResource
-                  - wafv2:ListTagsForResource
                   - wafv2:AssociateWebACL
                   - wafv2:DisassociateWebACL
-                  - wafv2:GetWebACLForResource
                   - wafv2:PutPermissionPolicy
                   - wafv2:GetPermissionPolicy
                   - amplify:AssociateWebACL

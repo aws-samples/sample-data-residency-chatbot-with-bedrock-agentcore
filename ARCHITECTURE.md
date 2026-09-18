@@ -1,8 +1,12 @@
 # Data-residency chatbot with Amazon Bedrock AgentCore — Architecture
 
-How the chatbot works internally. Every component runs in `ap-south-1` (Mumbai);
-the only component outside the Region is the user's browser, and it only ever
-receives the final natural-language answer — never raw program data.
+How the chatbot works internally. Every data-path component runs in
+`ap-south-1` (Mumbai); the only component outside the Region is the user's
+browser, and it only ever receives the final natural-language answer — never
+raw program data. The one out-of-Region *configuration* resource is the AWS WAF
+web ACL that fronts the Amplify UI (Amplify's firewall integration requires the
+global CloudFront scope, us-east-1); it holds firewall rules and aggregate
+counters, no program data (see [DEPLOYMENT.md](DEPLOYMENT.md#data-residency--amplify)).
 
 ## System overview
 
@@ -32,7 +36,10 @@ The Agent_Lambda handler serves both entry points from one code path:
 | REST API `POST /chat` | Demo (default) | API Gateway AWS_PROXY → synchronous request/response | Simple; no 29s ceiling issue for the ~3-16s queries. What `deploy.py` wires by default. |
 | WebSocket API (`wss://`) | Production | `$connect`/`$disconnect` helpers + `sendMessage`/`$default` → agent; answer returned via `@connections` | Full duplex, no HTTP timeout coupling. The agent returns 200 immediately and re-invokes itself asynchronously to run the loop, then posts the answer to the originating connection. Deploy with `deploy.py --with-websocket`. |
 
-Both are regional `ap-south-1` endpoints — no CloudFront (a global service) anywhere.
+Both are regional `ap-south-1` endpoints; the browser calls them directly. There
+is no customer-managed CloudFront distribution in the stack (Amplify Hosting
+serves the static shell through its own managed CDN, which is why its firewall
+web ACL is CloudFront-scoped).
 
 ## Components
 
@@ -184,9 +191,14 @@ Tool_Lambda whitelist — so they can never drift.
   KnownBadInputsRuleSet). Amplify's firewall integration requires the web ACL
   in the global (CloudFront) scope — it is firewall configuration only and
   carries no program data.
-- Data residency: everything in `ap-south-1`; Bedrock invoked in-region
-  ON_DEMAND (guarded); no CloudFront distribution in the stack (the WAF web
-  ACL above is the sole global configuration resource).
+- Data residency: all program data and inference in `ap-south-1`; Bedrock
+  invoked in-region ON_DEMAND (guarded); no customer-managed CloudFront
+  distribution. Global resources are configuration only: the WAF web ACL
+  above and the IAM roles (IAM is a global service by nature).
+- The WAF protects the static UI shell, not the API. `POST /chat` is called by
+  the browser directly and is open (no authorizer, default throttling) for the
+  demo — see [DEPLOYMENT.md](DEPLOYMENT.md#authorizer-gap-production) before
+  exposing it beyond a demo.
 - The agent handler never raises: any tool/model failure returns a polite
   "couldn't answer" message (`errors.wrap_tool_error`).
 

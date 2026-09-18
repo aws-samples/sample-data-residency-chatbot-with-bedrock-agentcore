@@ -30,7 +30,9 @@ import boto3
 from botocore.exceptions import ClientError
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "infra"))
-from config import ACCOUNT, DATA_BUCKET, IDS_PATH, PROJECT, REGION, load_ids  # noqa: E402
+from config import (  # noqa: E402
+    ACCOUNT, DATA_BUCKET, IDS_PATH, PROJECT, REGION, TAG_KEY, TAG_VALUE, load_ids,
+)
 
 ids = load_ids()
 
@@ -184,8 +186,8 @@ def cleanup_apis() -> None:
                 if item.get("name") == f"{PROJECT}-rest":
                     rest_id = item["id"]
                     break
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            print(f"[skip] REST API discovery: {type(e).__name__}: {e}")
     if rest_id:
         _try(f"REST API {rest_id}",
              lambda: apigw.delete_rest_api(restApiId=rest_id))
@@ -197,8 +199,8 @@ def cleanup_apis() -> None:
                 if api.get("Name") == f"{PROJECT}-ws":
                     ws_id = api["ApiId"]
                     break
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            print(f"[skip] WebSocket API discovery: {type(e).__name__}: {e}")
     if ws_id:
         _try(f"WebSocket API {ws_id}",
              lambda: apigw2.delete_api(ApiId=ws_id))
@@ -217,19 +219,71 @@ def cleanup_ecr() -> None:
          lambda: ecr.delete_repository(repositoryName=f"{PROJECT}-agent", force=True))
 
 
+def _find_gateway_id(acc) -> str | None:
+    """Locate the project gateway by its well-known name (stateless path)."""
+    token = None
+    try:
+        while True:
+            kwargs = {"maxResults": 50}
+            if token:
+                kwargs["nextToken"] = token
+            resp = acc.list_gateways(**kwargs)
+            for g in resp.get("items", []):
+                if g.get("name") == f"{PROJECT}-gateway":
+                    return g["gatewayId"]
+            token = resp.get("nextToken")
+            if not token:
+                return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _find_memory_id(acc) -> str | None:
+    """Locate the project memory by name (summaries omit name; get each)."""
+    token = None
+    try:
+        while True:
+            kwargs = {"maxResults": 50}
+            if token:
+                kwargs["nextToken"] = token
+            resp = acc.list_memories(**kwargs)
+            for m in resp.get("memories", []):
+                detail = acc.get_memory(memoryId=m["id"])["memory"]
+                if detail.get("name") == "residency_chatbot_memory":
+                    return m["id"]
+            token = resp.get("nextToken")
+            if not token:
+                return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def cleanup_agentcore() -> None:
     acc = boto3.client("bedrock-agentcore-control", region_name=REGION)
-    gid = ids.get("gateway_id")
+    # STATE-LESS FALLBACK: discover by the well-known names when ids are
+    # missing (the one-click cleanup runs without network_ids.json).
+    gid = ids.get("gateway_id") or _find_gateway_id(acc)
     if gid:
-        tid = ids.get("gateway_target_id")
-        if tid:
+        tids = [ids["gateway_target_id"]] if ids.get("gateway_target_id") else []
+        if not tids:
+            try:
+                tids = [t["targetId"] for t in
+                        acc.list_gateway_targets(gatewayIdentifier=gid).get("items", [])]
+            except Exception:  # noqa: BLE001
+                tids = []
+        for tid in tids:
             _try(f"gateway target {tid}",
-                 lambda: acc.delete_gateway_target(gatewayIdentifier=gid, targetId=tid))
+                 lambda tid=tid: acc.delete_gateway_target(gatewayIdentifier=gid, targetId=tid))
+        if tids:
             time.sleep(3)
         _try(f"gateway {gid}", lambda: acc.delete_gateway(gatewayIdentifier=gid))
-    if ids.get("memory_id"):
-        _try(f"memory {ids['memory_id']}",
-             lambda: acc.delete_memory(memoryId=ids["memory_id"]))
+    else:
+        print("[skip] gateway: not found")
+    mid = ids.get("memory_id") or _find_memory_id(acc)
+    if mid:
+        _try(f"memory {mid}", lambda: acc.delete_memory(memoryId=mid))
+    else:
+        print("[skip] memory: not found")
 
 
 def cleanup_aurora() -> None:
@@ -242,15 +296,15 @@ def cleanup_aurora() -> None:
     try:
         rds.get_waiter("db_instance_deleted").wait(
             DBInstanceIdentifier=inst, WaiterConfig={"Delay": 20, "MaxAttempts": 60})
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        print(f"[info] instance waiter ended: {type(e).__name__} (ok if already gone)")
     _try(f"db cluster {clus}",
          lambda: rds.delete_db_cluster(DBClusterIdentifier=clus, SkipFinalSnapshot=True))
     try:
         rds.get_waiter("db_cluster_deleted").wait(
             DBClusterIdentifier=clus, WaiterConfig={"Delay": 20, "MaxAttempts": 60})
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        print(f"[info] cluster waiter ended: {type(e).__name__} (ok if already gone)")
     _try(f"db subnet group {PROJECT}-db-subnet-group",
          lambda: rds.delete_db_subnet_group(DBSubnetGroupName=f"{PROJECT}-db-subnet-group"))
 
@@ -284,20 +338,57 @@ def cleanup_iam() -> None:
             print(f"[skip] iam role {role}: {e.response['Error'].get('Code')}")
 
 
+def _sweep_lambda_enis(ec2, vpc_id: str) -> None:
+    """Delete orphaned ENIs left by THIS PROJECT's in-VPC Lambdas.
+
+    Lambda-managed interfaces linger for many minutes after the functions are
+    deleted and block subnet deletion. Only interfaces whose description names
+    a residency-chatbot-* function are touched (Lambda names them
+    "AWS Lambda VPC ENI-<function>-<uuid>"), so a shared/customer VPC is never
+    swept of unrelated interfaces. Best-effort: any permission problem degrades
+    to the subnet-delete retries below instead of aborting the teardown.
+    """
+    for _ in range(12):
+        try:
+            enis = ec2.describe_network_interfaces(Filters=[
+                {"Name": "vpc-id", "Values": [vpc_id]},
+                {"Name": "description", "Values": [f"AWS Lambda VPC ENI-{PROJECT}-*"]},
+            ])["NetworkInterfaces"]
+        except ClientError as e:
+            print(f"[skip] eni sweep: {e.response['Error'].get('Code', 'error')}")
+            return
+        if not enis:
+            return
+        available = [e for e in enis if e.get("Status") == "available"]
+        for eni in available:
+            _try(f"eni {eni['NetworkInterfaceId']}",
+                 lambda eid=eni["NetworkInterfaceId"]:
+                 ec2.delete_network_interface(NetworkInterfaceId=eid))
+        # In-use interfaces detach asynchronously; wait and re-check.
+        time.sleep(2 if available else 10)
+
+
 def cleanup_network() -> None:
     ec2 = boto3.client("ec2", region_name=REGION)
     vpc_id = ids.get("vpc_id")
     if not vpc_id:
-        # STATE-LESS FALLBACK: discover the project VPC by its Name tag
-        # (the one-click cleanup runs from a fresh bundle without
-        # network_ids.json).
+        # STATE-LESS FALLBACK: discover the project VPC (the one-click cleanup
+        # runs from a fresh bundle without network_ids.json). Require BOTH
+        # tags the deploy sets, and refuse to guess if more than one matches:
+        # the deletions below are total for whichever VPC is chosen.
         try:
             vpcs = ec2.describe_vpcs(Filters=[
                 {"Name": "tag:Name", "Values": [f"{PROJECT}-vpc"]},
+                {"Name": f"tag:{TAG_KEY}", "Values": [TAG_VALUE]},
             ])["Vpcs"]
-            vpc_id = vpcs[0]["VpcId"] if vpcs else None
-        except Exception:  # noqa: BLE001
-            vpc_id = None
+        except Exception as e:  # noqa: BLE001
+            print(f"[skip] vpc discovery: {type(e).__name__}: {e}")
+            return
+        if len(vpcs) > 1:
+            print(f"[skip] vpc: {len(vpcs)} VPCs match {PROJECT}-vpc — refusing to "
+                  f"guess; set vpc_id in network_ids.json and re-run")
+            return
+        vpc_id = vpcs[0]["VpcId"] if vpcs else None
     if not vpc_id:
         print("[skip] vpc: not found")
         return
@@ -308,22 +399,7 @@ def cleanup_network() -> None:
         _try("vpc endpoints",
              lambda: ec2.delete_vpc_endpoints(VpcEndpointIds=[e["VpcEndpointId"] for e in eps]))
         time.sleep(5)
-    # Orphaned Lambda-managed ENIs keep subnets undeletable for many minutes
-    # after the in-VPC functions are gone; delete any 'available' ones now.
-    for _ in range(12):
-        enis = ec2.describe_network_interfaces(
-            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["NetworkInterfaces"]
-        if not enis:
-            break
-        for eni in enis:
-            if eni.get("Status") == "available":
-                _try(f"eni {eni['NetworkInterfaceId']}",
-                     lambda eid=eni["NetworkInterfaceId"]:
-                     ec2.delete_network_interface(NetworkInterfaceId=eid))
-        if all(e.get("Status") != "available" for e in enis):
-            time.sleep(10)  # in-use ENIs detach asynchronously; wait and re-check
-        else:
-            time.sleep(2)
+    _sweep_lambda_enis(ec2, vpc_id)
     # subnets (from state, else discovered from the VPC)
     subnet_ids = ids.get("private_subnet_ids") or [
         s["SubnetId"] for s in ec2.describe_subnets(
@@ -351,8 +427,8 @@ def cleanup_network() -> None:
             for a in assoc:
                 if a.get("RouteTableAssociationId"):
                     ec2.disassociate_route_table(AssociationId=a["RouteTableAssociationId"])
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            print(f"[skip] route table {rt} disassociate: {type(e).__name__}")
         _try(f"route table {rt}", lambda rt=rt: ec2.delete_route_table(RouteTableId=rt))
     # security groups (from state, else discovered; retry — dependencies clear
     # asynchronously)

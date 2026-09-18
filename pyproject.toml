@@ -24,3 +24,18 @@ package = false
 dev = [
     "websockets>=16.0",
 ]
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests", ".hypothesis", ".pytest_cache"]
+# Every finding below was reviewed individually; each rule is suppressed for a
+# documented reason that holds across the whole codebase:
+#   B404/B603/B607 — deploy.py and infra/*.py run child processes ONLY as
+#     fixed, fully literal argv lists (["uv", "run", "python", "<in-repo
+#     script>"] and the container-tool wrapper); shell=True is never used and
+#     no user-controlled input ever reaches a command line. "Partial path"
+#     resolution of `uv`/`bash` via PATH is intentional so the same code runs
+#     on a laptop (finch) and in CodeBuild (docker).
+#   B311 — tools/make_sample_data.py uses a SEEDED random.Random to generate
+#     reproducible synthetic sample data; nothing security-relevant is derived
+#     from it.
+skips = ["B404", "B603", "B607", "B311"]
