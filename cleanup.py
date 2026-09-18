@@ -359,7 +359,9 @@ def _sweep_lambda_enis(ec2, vpc_id: str) -> None:
     swept of unrelated interfaces. Best-effort: any permission problem degrades
     to the subnet-delete retries below instead of aborting the teardown.
     """
-    for _ in range(12):
+    # Lambda releases its Hyperplane ENIs asynchronously after the function is
+    # deleted; observed live at 10-20 minutes. Poll up to ~25 min (150 x 10s).
+    for _ in range(150):
         try:
             enis = ec2.describe_network_interfaces(Filters=[
                 {"Name": "vpc-id", "Values": [vpc_id]},
