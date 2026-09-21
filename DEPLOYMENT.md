@@ -287,22 +287,25 @@ the CodeBuild role in the one-click launcher — no more. That role's policy
 truth: every statement is scoped to this project's `residency-chatbot-*`
 resource names, region-constrained where the service supports it, and was
 exercised by a live end-to-end deploy and cleanup. Do not hand-write a broader
-policy; render it from the template so the two can never drift, and attach it
-as an **inline** policy on a dedicated deploy role that you assume for the
-deployment (the rendered document is ~7 KB — over the 6,144-character limit
-for a customer-managed policy but within the 10,240 limit for a role-inline
-policy, which is also how the launcher attaches it):
+policy; render it from the template so the two can never drift. The launcher
+attaches its permissions as three customer-managed policies (IAM caps a role's
+aggregate inline policies at 10,240 characters, which a fully scoped document
+exceeds; each managed policy gets its own 6,144-character budget). The renderer
+writes one file per policy and checks each against that limit:
 
 ```bash
-uv run python deploy/render_deployer_policy.py --account <ACCOUNT_ID> > deployer-policy.json
+uv run python deploy/render_deployer_policy.py --account <ACCOUNT_ID> --out-dir ./policies
 
 # A dedicated role your identity can assume (replace the principal with your user/role ARN).
 aws iam create-role --role-name residency-chatbot-deployer \
   --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
     "Principal":{"AWS":"arn:aws:iam::<ACCOUNT_ID>:user/<YOUR_USER>"},"Action":"sts:AssumeRole"}]}'
-aws iam put-role-policy --role-name residency-chatbot-deployer \
-  --policy-name residency-chatbot-deploy-permissions \
-  --policy-document file://deployer-policy.json
+for f in ./policies/*.json; do
+  name="residency-chatbot-$(basename "$f" .json)"
+  arn=$(aws iam create-policy --policy-name "$name" --policy-document "file://$f" \
+        --query Policy.Arn --output text)
+  aws iam attach-role-policy --role-name residency-chatbot-deployer --policy-arn "$arn"
+done
 
 # Run the deploy under that role (e.g. via a named profile with role_arn set).
 AWS_PROFILE=residency-chatbot-deployer uv run python deploy.py
@@ -320,11 +323,11 @@ exact actions and ARNs):
 | `KmsDescribeForEncryptedAurora`, `KmsGrantsViaRdsAndSecretsManager` | `kms:DescribeKey`; `kms:CreateGrant` only via RDS / Secrets Manager for AWS resources |
 | `IamForDeploy`, `PassProjectRolesOnly` | roles `residency-chatbot-*`; `iam:PassRole` only to Lambda, RDS, and AgentCore |
 | `WafForAmplifyUi`, `WafDisassociateForCleanup`, `WafListWebAcls` | web ACL `residency-chatbot-*` in the CloudFront scope (us-east-1, required by Amplify) and this account's Amplify apps |
-| `ReadOnlyDescribes`, `EcrAuthToken`, `CreateTimeIdResources` | actions whose resource ids are generated at create time (VPC, API Gateway, Amplify, AgentCore) or that do not support resource-level scoping; each is constrained to the deploy region with `aws:RequestedRegion` |
-
-The `WafDisassociateForCleanup` and `WafListWebAcls` statements use
-`Resource: "*"` because AWS WAF evaluates those two actions without a resource
-(verified with the IAM policy simulator); both are bounded to `us-east-1`.
+| `Ec2CreateTaggedNetwork`, `Ec2CreateInExistingResources`, `Ec2TagOnCreateOnly`, `Ec2ModifyDeleteProjectTagged` | VPC/subnet/route-table/SG/endpoint ids are generated at create time, so EC2 is scoped by **tags**: creates require `aws:RequestTag/Project` (every network resource is tagged atomically via `TagSpecifications`), `CreateTags` is allowed only during those creates (`ec2:CreateAction`), and every modify/delete requires `aws:ResourceTag/Project` |
+| `Ec2SecurityGroupRulesAndOrphanedEnis` | security-group-rule and network-interface ARNs in this account/region (SG rules and Lambda-managed ENIs carry no tag) |
+| `ApiGatewayInThisRegion` | `/restapis*` and `/apis*` ARN trees in the deploy region |
+| `AmplifyAppsInThisAccount`, `AgentCoreProjectResources` | Amplify `apps/*` in this account/region; AgentCore `gateway/residency-chatbot-*`, `memory/residency_chatbot_*` |
+| `ReadOnlyDescribes`, `EcrAuthToken`, `AmplifyCreateAndList`, `AgentCoreCreateAndListInRegion`, `WafListWebAcls`, `WafDisassociateForCleanup` | actions IAM evaluates **without a resource** (Describe*/List*, `Create*` for a resource that does not exist yet, auth tokens, WAF disassociate) — verified with the IAM policy simulator; each is constrained to a region with `aws:RequestedRegion` |
 
 ## Documentation
 

@@ -52,6 +52,517 @@ Resources:
   # are generated at create time) live in their own statements, constrained to
   # this region via aws:RequestedRegion, with per-statement comments.
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # The CodeBuild role's permissions are split across three customer-managed
+  # policies. IAM caps the AGGREGATE of a role's inline policies at 10,240
+  # characters (RolePolicySizeQuota) and a fully scoped, least-privilege
+  # document does not fit in that budget; managed policies each get their own
+  # 6,144-character budget. Grouped by concern:
+  #   1. resources addressable by their project name (S3, secrets, DDB, Lambda,
+  #      ECR, RDS, logs) plus read-only describes;
+  #   2. resources whose ids are generated at create time (EC2 network via tag
+  #      conditions, API Gateway, Amplify, AgentCore via ARN patterns);
+  #   3. KMS grants, WAF for the Amplify UI, and the project IAM roles.
+  # ---------------------------------------------------------------------------
+  DeployPolicyProjectResources:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Deploy permissions on resources named residency-chatbot-* (S3, Secrets Manager, DynamoDB, Lambda, ECR, RDS, CloudWatch Logs) and read-only describes.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Sid: Logs
+          Effect: Allow
+          Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogGroups
+            - logs:PutRetentionPolicy
+            - logs:TagResource
+          Resource:
+            - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/residency-chatbot-*"
+            - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/residency-chatbot-*"
+            - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/residency-chatbot-*:*"
+            - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/residency-chatbot-*:*"
+        - Sid: ReadSourceBundle
+          Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:GetObjectVersion
+          Resource: !Sub "arn:aws:s3:::${SourceBucket}/${SourceKey}"
+        - Sid: ProjectS3
+          Effect: Allow
+          Action:
+            - s3:CreateBucket
+            - s3:DeleteBucket
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:ListBucket
+            - s3:GetBucketLocation
+            - s3:PutBucketTagging
+            - s3:PutBucketPublicAccessBlock
+            - s3:GetBucketPublicAccessBlock
+          Resource:
+            - "arn:aws:s3:::residency-chatbot-*"
+            - "arn:aws:s3:::residency-chatbot-*/*"
+        - Sid: ProjectSecrets
+          Effect: Allow
+          Action:
+            - secretsmanager:CreateSecret
+            - secretsmanager:DeleteSecret
+            - secretsmanager:DescribeSecret
+            - secretsmanager:GetSecretValue
+            - secretsmanager:PutSecretValue
+            - secretsmanager:TagResource
+          Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:residency-chatbot-*"
+        - Sid: ProjectDynamoDB
+          Effect: Allow
+          Action:
+            - dynamodb:CreateTable
+            - dynamodb:DeleteTable
+            - dynamodb:DescribeTable
+            - dynamodb:UpdateTimeToLive
+            - dynamodb:DescribeTimeToLive
+            - dynamodb:TagResource
+            - dynamodb:Scan
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+          Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/residency-chatbot-*"
+        - Sid: ProjectLambda
+          Effect: Allow
+          Action:
+            - lambda:CreateFunction
+            - lambda:DeleteFunction
+            - lambda:GetFunction
+            - lambda:GetFunctionConfiguration
+            - lambda:UpdateFunctionCode
+            - lambda:UpdateFunctionConfiguration
+            - lambda:InvokeFunction
+            - lambda:AddPermission
+            - lambda:RemovePermission
+            - lambda:TagResource
+          Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:residency-chatbot-*"
+        - Sid: ProjectEcr
+          Effect: Allow
+          Action:
+            - ecr:CreateRepository
+            - ecr:DeleteRepository
+            - ecr:DescribeRepositories
+            - ecr:BatchGetImage
+            - ecr:BatchCheckLayerAvailability
+            - ecr:GetDownloadUrlForLayer
+            - ecr:PutImage
+            - ecr:InitiateLayerUpload
+            - ecr:UploadLayerPart
+            - ecr:CompleteLayerUpload
+            - ecr:TagResource
+            - ecr:ListImages
+            - ecr:DescribeImages
+            - ecr:BatchDeleteImage
+            # The agent image repo needs a repository policy that lets
+            # the Lambda service pull images (container-image functions
+            # pull as the service principal, not the execution role).
+            - ecr:SetRepositoryPolicy
+            - ecr:GetRepositoryPolicy
+          Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/residency-chatbot-*"
+        - Sid: EcrAuthToken
+          # GetAuthorizationToken does not support resource-level scoping;
+          # constrained to this region instead.
+          Effect: Allow
+          Action:
+            - ecr:GetAuthorizationToken
+          Resource: "*"
+          Condition:
+            StringEquals:
+              aws:RequestedRegion: !Ref AWS::Region
+        - Sid: ProjectRds
+          Effect: Allow
+          Action:
+            - rds:CreateDBCluster
+            - rds:DeleteDBCluster
+            - rds:DescribeDBClusters
+            - rds:CreateDBInstance
+            - rds:DeleteDBInstance
+            - rds:DescribeDBInstances
+            - rds:CreateDBSubnetGroup
+            - rds:DeleteDBSubnetGroup
+            - rds:DescribeDBSubnetGroups
+            - rds:AddTagsToResource
+          Resource:
+            - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:residency-chatbot-*"
+            - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:residency-chatbot-*"
+            - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:subgrp:residency-chatbot-*"
+        - Sid: ReadOnlyDescribes
+          # Read-only discovery calls used for idempotency checks; these
+          # EC2/RDS/STS describe actions do not support resource-level
+          # scoping. Constrained to this region.
+          Effect: Allow
+          Action:
+            - ec2:DescribeVpcs
+            - ec2:DescribeSubnets
+            - ec2:DescribeRouteTables
+            - ec2:DescribeSecurityGroups
+            - ec2:DescribeVpcEndpoints
+            - ec2:DescribeNetworkInterfaces
+            - rds:DescribeDBEngineVersions
+            - bedrock:ListFoundationModels
+            - sts:GetCallerIdentity
+          Resource: "*"
+          Condition:
+            StringEquals:
+              aws:RequestedRegion: !Ref AWS::Region
+
+  DeployPolicyGeneratedIdResources:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Deploy permissions on resources whose ids are generated at create time, scoped by tag conditions (EC2 network) and ARN patterns (API Gateway, Amplify, Bedrock AgentCore).
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        # ---------------------------------------------------------------
+        # Resources whose ids are generated at create time (VPC, subnets,
+        # SGs, route tables, endpoints, API Gateway, Amplify, AgentCore)
+        # cannot be named in advance, so each service below is scoped by
+        # the tightest mechanism it supports: tag conditions for EC2
+        # (every network resource is tagged Project=<TAG> atomically at
+        # creation), partial ARN patterns for API Gateway / Amplify /
+        # AgentCore, and the region condition throughout.
+        # ---------------------------------------------------------------
+        - Sid: Ec2CreateTaggedNetwork
+          # Creates require the project tag in the request (set via
+          # TagSpecifications), so untagged resources cannot be created.
+          Effect: Allow
+          Action:
+            - ec2:CreateVpc
+            - ec2:CreateSubnet
+            - ec2:CreateRouteTable
+            - ec2:CreateSecurityGroup
+            - ec2:CreateVpcEndpoint
+          Resource:
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:route-table/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc-endpoint/*"
+          Condition:
+            StringEquals:
+              aws:RequestTag/Project: residency-agentcore-chatbot
+        - Sid: Ec2CreateInExistingResources
+          # The same creates are ALSO authorized against their parent /
+          # referenced resources (subnet->VPC, endpoint->route table/SGs),
+          # which must be project-tagged.
+          Effect: Allow
+          Action:
+            - ec2:CreateSubnet
+            - ec2:CreateRouteTable
+            - ec2:CreateSecurityGroup
+            - ec2:CreateVpcEndpoint
+          Resource:
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:route-table/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*"
+          Condition:
+            StringEquals:
+              aws:ResourceTag/Project: residency-agentcore-chatbot
+        - Sid: Ec2TagOnCreateOnly
+          # CreateTags is required alongside TagSpecifications on create;
+          # restricted to the create actions (ec2:CreateAction) so the
+          # role cannot re-tag arbitrary existing resources. Bounded to
+          # this account/region.
+          Effect: Allow
+          Action:
+            - ec2:CreateTags
+          Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:*/*"
+          Condition:
+            StringEquals:
+              ec2:CreateAction:
+                - CreateVpc
+                - CreateSubnet
+                - CreateRouteTable
+                - CreateSecurityGroup
+                - CreateVpcEndpoint
+        - Sid: Ec2ModifyDeleteProjectTagged
+          # Every modify/delete is restricted to resources carrying the
+          # project tag, so the role cannot touch any other network.
+          Effect: Allow
+          Action:
+            - ec2:DeleteVpc
+            - ec2:ModifyVpcAttribute
+            - ec2:DeleteSubnet
+            - ec2:ModifySubnetAttribute
+            - ec2:DeleteRouteTable
+            - ec2:AssociateRouteTable
+            - ec2:DisassociateRouteTable
+            - ec2:DeleteSecurityGroup
+            - ec2:AuthorizeSecurityGroupIngress
+            - ec2:RevokeSecurityGroupIngress
+            - ec2:AuthorizeSecurityGroupEgress
+            - ec2:RevokeSecurityGroupEgress
+            - ec2:DeleteVpcEndpoints
+            - ec2:ModifyVpcEndpoint
+          Resource:
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:route-table/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc-endpoint/*"
+          Condition:
+            StringEquals:
+              aws:ResourceTag/Project: residency-agentcore-chatbot
+        - Sid: Ec2SecurityGroupRulesAndOrphanedEnis
+          # AuthorizeSecurityGroup* also authorize against the
+          # security-group-rule resource type (rules carry no tag), and
+          # cleanup.py deletes the orphaned Lambda-managed ENIs left in
+          # the project VPC (Lambda creates them untagged; the code
+          # filters by the function-name description). Both are bounded
+          # to this account/region by the ARN pattern.
+          Effect: Allow
+          Action:
+            - ec2:AuthorizeSecurityGroupIngress
+            - ec2:RevokeSecurityGroupIngress
+            - ec2:AuthorizeSecurityGroupEgress
+            - ec2:RevokeSecurityGroupEgress
+            - ec2:DeleteNetworkInterface
+          Resource:
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group-rule/*"
+            - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*"
+        - Sid: ApiGatewayInThisRegion
+          # API Gateway REST (v1) and WebSocket (v2) control plane. The
+          # api ids are generated at create time; the ARN pattern bounds
+          # the role to this region's APIs and the REST/WS api trees.
+          Effect: Allow
+          Action:
+            - apigateway:GET
+            - apigateway:POST
+            - apigateway:PUT
+            - apigateway:PATCH
+            - apigateway:DELETE
+          Resource:
+            - !Sub "arn:aws:apigateway:${AWS::Region}::/restapis"
+            - !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/*"
+            - !Sub "arn:aws:apigateway:${AWS::Region}::/apis"
+            - !Sub "arn:aws:apigateway:${AWS::Region}::/apis/*"
+            - !Sub "arn:aws:apigateway:${AWS::Region}::/tags/*"
+        - Sid: AmplifyAppsInThisAccount
+          # Per-app actions bounded to this account's apps in this region
+          # (app ids are generated at create time).
+          Effect: Allow
+          Action:
+            - amplify:DeleteApp
+            - amplify:GetApp
+            - amplify:CreateBranch
+            - amplify:GetBranch
+            - amplify:CreateDeployment
+            - amplify:StartDeployment
+            - amplify:GetJob
+          Resource:
+            - !Sub "arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/*"
+        - Sid: AmplifyCreateAndList
+          # CreateApp and ListApps are evaluated by IAM without a resource
+          # (verified with the IAM policy simulator: no ARN pattern
+          # matches them), so they cannot be resource-scoped; bounded to
+          # this region instead.
+          Effect: Allow
+          Action:
+            - amplify:CreateApp
+            - amplify:ListApps
+          Resource: "*"
+          Condition:
+            StringEquals:
+              aws:RequestedRegion: !Ref AWS::Region
+        - Sid: BedrockInvokeInRegion
+          # Preflight/verification invoke of the configured in-region model.
+          Effect: Allow
+          Action:
+            - bedrock:InvokeModel
+          Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/*"
+        - Sid: AgentCoreProjectResources
+          # Gateway/memory/workload-identity ids are generated at create
+          # time but embed the project name; bounded to those ARN
+          # patterns in this account/region.
+          Effect: Allow
+          Action:
+            - bedrock-agentcore:GetGateway
+            - bedrock-agentcore:DeleteGateway
+            - bedrock-agentcore:CreateGatewayTarget
+            - bedrock-agentcore:GetGatewayTarget
+            - bedrock-agentcore:ListGatewayTargets
+            - bedrock-agentcore:DeleteGatewayTarget
+            - bedrock-agentcore:GetMemory
+            - bedrock-agentcore:DeleteMemory
+            - bedrock-agentcore:GetWorkloadIdentity
+            - bedrock-agentcore:DeleteWorkloadIdentity
+            - bedrock-agentcore:ListTagsForResource
+          Resource:
+            - !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/residency-chatbot-*"
+            - !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:memory/residency_chatbot_*"
+            - !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/*"
+        - Sid: AgentCoreCreateAndListInRegion
+          # Create* and List* are evaluated by IAM without a resource (the
+          # resource does not exist yet / listing is account-wide) —
+          # verified with the IAM policy simulator, no ARN pattern matches
+          # them. They cannot be resource-scoped; bounded to this region.
+          # Get/Delete/Tag on the created resources ARE scoped above.
+          Effect: Allow
+          Action:
+            - bedrock-agentcore:CreateGateway
+            - bedrock-agentcore:CreateMemory
+            - bedrock-agentcore:CreateWorkloadIdentity
+            # TagResource: CreateGateway/CreateMemory tag on create and authorize
+            # it against the un-named resource (observed live: denied on
+            # "gateway/*" with the name-scoped pattern above).
+            - bedrock-agentcore:TagResource
+            # SynchronizeGatewayTargets: likewise a dependent action of
+            # CreateGateway, authorized against "gateway/*" (observed live).
+            - bedrock-agentcore:SynchronizeGatewayTargets
+            - bedrock-agentcore:ListGateways
+            - bedrock-agentcore:ListMemories
+          Resource: "*"
+          Condition:
+            StringEquals:
+              aws:RequestedRegion: !Ref AWS::Region
+
+  DeployPolicyKmsWafIam:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: KMS grants for encrypted Aurora, AWS WAF for the Amplify UI (CloudFront scope, us-east-1), and the project's residency-chatbot-* IAM roles.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Sid: RdsManagedMasterSecret
+          # CreateDBCluster with ManageMasterUserPassword=true makes RDS
+          # create and tag the master-user secret AS THE CALLER via a
+          # forward-access session. RDS names these secrets
+          # "rds!cluster-<uuid>", which the ProjectSecrets prefix above
+          # does not cover — without this statement the deploy fails with
+          # "The user isn't authorized to create a secret". Create-side
+          # actions only: the deploy role never READS the master secret
+          # (the bootstrap/loader Lambdas do, via their own execution
+          # role), and RDS deletes the secret with the cluster.
+          Effect: Allow
+          Action:
+            - secretsmanager:CreateSecret
+            - secretsmanager:TagResource
+          Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:rds!cluster-*"
+        - Sid: KmsDescribeForEncryptedAurora
+          # CreateDBCluster with StorageEncrypted=true and
+          # ManageMasterUserPassword=true makes RDS validate the account
+          # default keys (aws/rds, aws/secretsmanager) AS THE CALLER via
+          # a forward-access session, which requires kms:DescribeKey on
+          # the caller directly. Without it the deploy fails with
+          # "KMSKeyNotAccessibleFault: The specified KMS key [null]...".
+          # AWS-managed key ids are account-generated, so they cannot be
+          # resource-scoped in the template; constrained to this region.
+          Effect: Allow
+          Action:
+            - kms:DescribeKey
+          Resource: "*"
+          Condition:
+            StringEquals:
+              aws:RequestedRegion: !Ref AWS::Region
+        - Sid: KmsGrantsViaRdsAndSecretsManager
+          # RDS/Secrets Manager create KMS grants on the default keys on
+          # the caller's behalf (storage encryption + managed master
+          # secret). Bounded to grants created through those services in
+          # this region, for AWS resources only.
+          Effect: Allow
+          Action:
+            - kms:CreateGrant
+          Resource: "*"
+          Condition:
+            Bool:
+              kms:GrantIsForAWSResource: "true"
+            StringEquals:
+              aws:RequestedRegion: !Ref AWS::Region
+              kms:ViaService:
+                - !Sub "rds.${AWS::Region}.amazonaws.com"
+                - !Sub "secretsmanager.${AWS::Region}.amazonaws.com"
+        - Sid: WafForAmplifyUi
+          # AWS WAF firewall for the Amplify-hosted UI. Amplify Hosting's
+          # firewall integration REQUIRES the web ACL in the GLOBAL
+          # (CloudFront) scope, which lives in us-east-1 — regional web
+          # ACLs are not compatible with Amplify. These actions therefore
+          # cannot carry the aws:RequestedRegion condition used elsewhere.
+          # Scoped to this project's web ACL name and this account's
+          # Amplify apps. The web ACL is firewall CONFIGURATION only —
+          # no program data is stored or processed outside ap-south-1.
+          # Associate/Disassociate authorize against BOTH the web ACL and
+          # the protected app, and Amplify attaches a resource policy to
+          # the ACL during association (Put/GetPermissionPolicy).
+          Effect: Allow
+          Action:
+            - wafv2:CreateWebACL
+            - wafv2:GetWebACL
+            - wafv2:DeleteWebACL
+            - wafv2:TagResource
+            - wafv2:AssociateWebACL
+            - wafv2:PutPermissionPolicy
+            - wafv2:GetPermissionPolicy
+            - amplify:AssociateWebACL
+            - amplify:DisassociateWebACL
+          Resource:
+            - !Sub "arn:aws:wafv2:us-east-1:${AWS::AccountId}:global/webacl/residency-chatbot-*/*"
+            # CreateWebACL that references AWS managed rule groups also
+            # authorizes against the managedruleset resource type.
+            - !Sub "arn:aws:wafv2:us-east-1:${AWS::AccountId}:global/managedruleset/*/*"
+            - !Sub "arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/*"
+        - Sid: WafDisassociateForCleanup
+          # wafv2:DisassociateWebACL is evaluated by IAM without a
+          # resource (verified with the IAM policy simulator: any ARN-
+          # scoped statement yields implicitDeny; only Resource "*"
+          # allows it). With the scoped statement above it was denied
+          # during the one-click cleanup, leaving the web ACL
+          # undeletable. Bounded to us-east-1 (home of the CloudFront
+          # WAF scope) since resource-level scoping is unavailable.
+          Effect: Allow
+          Action:
+            - wafv2:DisassociateWebACL
+          Resource: "*"
+          Condition:
+            StringEquals:
+              aws:RequestedRegion: us-east-1
+        - Sid: WafListWebAcls
+          # ListWebACLs does not support resource-level scoping; it is
+          # used for the idempotent find-or-create of the web ACL and is
+          # constrained to us-east-1 (home of the CloudFront WAF scope).
+          Effect: Allow
+          Action:
+            - wafv2:ListWebACLs
+          Resource: "*"
+          Condition:
+            StringEquals:
+              aws:RequestedRegion: us-east-1
+        - Sid: IamForDeploy
+          Effect: Allow
+          Action:
+            - iam:CreateRole
+            - iam:DeleteRole
+            - iam:GetRole
+            - iam:TagRole
+            - iam:UpdateAssumeRolePolicy
+            - iam:PutRolePolicy
+            - iam:DeleteRolePolicy
+            - iam:ListRolePolicies
+            - iam:GetRolePolicy
+            - iam:AttachRolePolicy
+            - iam:DetachRolePolicy
+            - iam:ListAttachedRolePolicies
+          Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/residency-chatbot-*"
+        - Sid: PassProjectRolesOnly
+          Effect: Allow
+          Action:
+            - iam:PassRole
+          Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/residency-chatbot-*"
+          Condition:
+            StringEquals:
+              iam:PassedToService:
+                - lambda.amazonaws.com
+                - rds.amazonaws.com
+                - bedrock-agentcore.amazonaws.com
+
   CodeBuildRole:
     Type: AWS::IAM::Role
     Properties:
@@ -63,356 +574,10 @@ Resources:
             Principal:
               Service: codebuild.amazonaws.com
             Action: sts:AssumeRole
-      Policies:
-        - PolicyName: residency-chatbot-deploy-permissions
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: Logs
-                Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogGroups
-                  - logs:PutRetentionPolicy
-                  - logs:TagResource
-                Resource:
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/residency-chatbot-*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/residency-chatbot-*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/residency-chatbot-*:*"
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/residency-chatbot-*:*"
-              - Sid: ReadSourceBundle
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                Resource: !Sub "arn:aws:s3:::${SourceBucket}/${SourceKey}"
-              - Sid: ProjectS3
-                Effect: Allow
-                Action:
-                  - s3:CreateBucket
-                  - s3:DeleteBucket
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                  - s3:GetBucketLocation
-                  - s3:PutBucketTagging
-                  - s3:PutBucketPublicAccessBlock
-                  - s3:GetBucketPublicAccessBlock
-                Resource:
-                  - "arn:aws:s3:::residency-chatbot-*"
-                  - "arn:aws:s3:::residency-chatbot-*/*"
-              - Sid: ProjectSecrets
-                Effect: Allow
-                Action:
-                  - secretsmanager:CreateSecret
-                  - secretsmanager:DeleteSecret
-                  - secretsmanager:DescribeSecret
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:PutSecretValue
-                  - secretsmanager:TagResource
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:residency-chatbot-*"
-              - Sid: ProjectDynamoDB
-                Effect: Allow
-                Action:
-                  - dynamodb:CreateTable
-                  - dynamodb:DeleteTable
-                  - dynamodb:DescribeTable
-                  - dynamodb:UpdateTimeToLive
-                  - dynamodb:DescribeTimeToLive
-                  - dynamodb:TagResource
-                  - dynamodb:Scan
-                  - dynamodb:PutItem
-                  - dynamodb:DeleteItem
-                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/residency-chatbot-*"
-              - Sid: ProjectLambda
-                Effect: Allow
-                Action:
-                  - lambda:CreateFunction
-                  - lambda:DeleteFunction
-                  - lambda:GetFunction
-                  - lambda:GetFunctionConfiguration
-                  - lambda:UpdateFunctionCode
-                  - lambda:UpdateFunctionConfiguration
-                  - lambda:InvokeFunction
-                  - lambda:AddPermission
-                  - lambda:RemovePermission
-                  - lambda:TagResource
-                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:residency-chatbot-*"
-              - Sid: ProjectEcr
-                Effect: Allow
-                Action:
-                  - ecr:CreateRepository
-                  - ecr:DeleteRepository
-                  - ecr:DescribeRepositories
-                  - ecr:BatchGetImage
-                  - ecr:BatchCheckLayerAvailability
-                  - ecr:GetDownloadUrlForLayer
-                  - ecr:PutImage
-                  - ecr:InitiateLayerUpload
-                  - ecr:UploadLayerPart
-                  - ecr:CompleteLayerUpload
-                  - ecr:TagResource
-                  - ecr:ListImages
-                  - ecr:DescribeImages
-                  - ecr:BatchDeleteImage
-                  # The agent image repo needs a repository policy that lets
-                  # the Lambda service pull images (container-image functions
-                  # pull as the service principal, not the execution role).
-                  - ecr:SetRepositoryPolicy
-                  - ecr:GetRepositoryPolicy
-                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/residency-chatbot-*"
-              - Sid: EcrAuthToken
-                # GetAuthorizationToken does not support resource-level scoping;
-                # constrained to this region instead.
-                Effect: Allow
-                Action:
-                  - ecr:GetAuthorizationToken
-                Resource: "*"
-                Condition:
-                  StringEquals:
-                    aws:RequestedRegion: !Ref AWS::Region
-              - Sid: ProjectRds
-                Effect: Allow
-                Action:
-                  - rds:CreateDBCluster
-                  - rds:DeleteDBCluster
-                  - rds:DescribeDBClusters
-                  - rds:CreateDBInstance
-                  - rds:DeleteDBInstance
-                  - rds:DescribeDBInstances
-                  - rds:CreateDBSubnetGroup
-                  - rds:DeleteDBSubnetGroup
-                  - rds:DescribeDBSubnetGroups
-                  - rds:AddTagsToResource
-                Resource:
-                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:residency-chatbot-*"
-                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:residency-chatbot-*"
-                  - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:subgrp:residency-chatbot-*"
-              - Sid: ReadOnlyDescribes
-                # Read-only discovery calls used for idempotency checks; these
-                # EC2/RDS/STS describe actions do not support resource-level
-                # scoping. Constrained to this region.
-                Effect: Allow
-                Action:
-                  - ec2:DescribeVpcs
-                  - ec2:DescribeSubnets
-                  - ec2:DescribeRouteTables
-                  - ec2:DescribeSecurityGroups
-                  - ec2:DescribeVpcEndpoints
-                  - ec2:DescribeNetworkInterfaces
-                  - rds:DescribeDBEngineVersions
-                  - bedrock:ListFoundationModels
-                  - sts:GetCallerIdentity
-                Resource: "*"
-                Condition:
-                  StringEquals:
-                    aws:RequestedRegion: !Ref AWS::Region
-              - Sid: CreateTimeIdResources
-                # These services generate resource ids at create time (VPC/
-                # subnets/SGs/VPC endpoints, API Gateway apis, Amplify apps,
-                # AgentCore gateways/memory), so their ARNs cannot be known in
-                # advance and resource-level scoping is not practical here.
-                # Mutations are limited to the explicit actions below and
-                # constrained to this region. Scope further per your governance
-                # if needed.
-                Effect: Allow
-                Action:
-                  - ec2:CreateVpc
-                  - ec2:DeleteVpc
-                  - ec2:ModifyVpcAttribute
-                  - ec2:CreateSubnet
-                  - ec2:DeleteSubnet
-                  - ec2:CreateRouteTable
-                  - ec2:DeleteRouteTable
-                  - ec2:AssociateRouteTable
-                  - ec2:DisassociateRouteTable
-                  - ec2:CreateSecurityGroup
-                  - ec2:DeleteSecurityGroup
-                  - ec2:AuthorizeSecurityGroupIngress
-                  - ec2:RevokeSecurityGroupIngress
-                  - ec2:AuthorizeSecurityGroupEgress
-                  - ec2:RevokeSecurityGroupEgress
-                  - ec2:CreateVpcEndpoint
-                  - ec2:DeleteVpcEndpoints
-                  - ec2:ModifyVpcEndpoint
-                  - ec2:ModifySubnetAttribute
-                  # cleanup.py deletes orphaned Lambda-managed ENIs (which
-                  # otherwise block subnet deletion for many minutes).
-                  - ec2:DeleteNetworkInterface
-                  - ec2:CreateTags
-                  - apigateway:GET
-                  - apigateway:POST
-                  - apigateway:PUT
-                  - apigateway:PATCH
-                  - apigateway:DELETE
-                  - amplify:CreateApp
-                  - amplify:DeleteApp
-                  - amplify:GetApp
-                  - amplify:ListApps
-                  - amplify:CreateBranch
-                  - amplify:GetBranch
-                  - amplify:CreateDeployment
-                  - amplify:StartDeployment
-                  - amplify:GetJob
-                  - bedrock:InvokeModel
-                  - bedrock-agentcore:CreateGateway
-                  - bedrock-agentcore:GetGateway
-                  - bedrock-agentcore:ListGateways
-                  - bedrock-agentcore:DeleteGateway
-                  - bedrock-agentcore:CreateGatewayTarget
-                  - bedrock-agentcore:GetGatewayTarget
-                  - bedrock-agentcore:ListGatewayTargets
-                  - bedrock-agentcore:DeleteGatewayTarget
-                  - bedrock-agentcore:CreateMemory
-                  - bedrock-agentcore:GetMemory
-                  - bedrock-agentcore:ListMemories
-                  - bedrock-agentcore:DeleteMemory
-                  - bedrock-agentcore:CreateWorkloadIdentity
-                  - bedrock-agentcore:GetWorkloadIdentity
-                  - bedrock-agentcore:DeleteWorkloadIdentity
-                  # CreateGateway authorizes dependent actions beyond Create*:
-                  # tagging on create, and target synchronization (the gateway
-                  # indexes its targets' tools at create/update time).
-                  - bedrock-agentcore:TagResource
-                  - bedrock-agentcore:ListTagsForResource
-                  - bedrock-agentcore:SynchronizeGatewayTargets
-                Resource: "*"
-                Condition:
-                  StringEquals:
-                    aws:RequestedRegion: !Ref AWS::Region
-              - Sid: RdsManagedMasterSecret
-                # CreateDBCluster with ManageMasterUserPassword=true makes RDS
-                # create and tag the master-user secret AS THE CALLER via a
-                # forward-access session. RDS names these secrets
-                # "rds!cluster-<uuid>", which the ProjectSecrets prefix above
-                # does not cover — without this statement the deploy fails with
-                # "The user isn't authorized to create a secret". Create-side
-                # actions only: the deploy role never READS the master secret
-                # (the bootstrap/loader Lambdas do, via their own execution
-                # role), and RDS deletes the secret with the cluster.
-                Effect: Allow
-                Action:
-                  - secretsmanager:CreateSecret
-                  - secretsmanager:TagResource
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:rds!cluster-*"
-              - Sid: KmsDescribeForEncryptedAurora
-                # CreateDBCluster with StorageEncrypted=true and
-                # ManageMasterUserPassword=true makes RDS validate the account
-                # default keys (aws/rds, aws/secretsmanager) AS THE CALLER via
-                # a forward-access session, which requires kms:DescribeKey on
-                # the caller directly. Without it the deploy fails with
-                # "KMSKeyNotAccessibleFault: The specified KMS key [null]...".
-                # AWS-managed key ids are account-generated, so they cannot be
-                # resource-scoped in the template; constrained to this region.
-                Effect: Allow
-                Action:
-                  - kms:DescribeKey
-                Resource: "*"
-                Condition:
-                  StringEquals:
-                    aws:RequestedRegion: !Ref AWS::Region
-              - Sid: KmsGrantsViaRdsAndSecretsManager
-                # RDS/Secrets Manager create KMS grants on the default keys on
-                # the caller's behalf (storage encryption + managed master
-                # secret). Bounded to grants created through those services in
-                # this region, for AWS resources only.
-                Effect: Allow
-                Action:
-                  - kms:CreateGrant
-                Resource: "*"
-                Condition:
-                  Bool:
-                    kms:GrantIsForAWSResource: "true"
-                  StringEquals:
-                    aws:RequestedRegion: !Ref AWS::Region
-                    kms:ViaService:
-                      - !Sub "rds.${AWS::Region}.amazonaws.com"
-                      - !Sub "secretsmanager.${AWS::Region}.amazonaws.com"
-              - Sid: WafForAmplifyUi
-                # AWS WAF firewall for the Amplify-hosted UI. Amplify Hosting's
-                # firewall integration REQUIRES the web ACL in the GLOBAL
-                # (CloudFront) scope, which lives in us-east-1 — regional web
-                # ACLs are not compatible with Amplify. These actions therefore
-                # cannot carry the aws:RequestedRegion condition used elsewhere.
-                # Scoped to this project's web ACL name and this account's
-                # Amplify apps. The web ACL is firewall CONFIGURATION only —
-                # no program data is stored or processed outside ap-south-1.
-                # Associate/Disassociate authorize against BOTH the web ACL and
-                # the protected app, and Amplify attaches a resource policy to
-                # the ACL during association (Put/GetPermissionPolicy).
-                Effect: Allow
-                Action:
-                  - wafv2:CreateWebACL
-                  - wafv2:GetWebACL
-                  - wafv2:DeleteWebACL
-                  - wafv2:TagResource
-                  - wafv2:AssociateWebACL
-                  - wafv2:PutPermissionPolicy
-                  - wafv2:GetPermissionPolicy
-                  - amplify:AssociateWebACL
-                  - amplify:DisassociateWebACL
-                Resource:
-                  - !Sub "arn:aws:wafv2:us-east-1:${AWS::AccountId}:global/webacl/residency-chatbot-*/*"
-                  # CreateWebACL that references AWS managed rule groups also
-                  # authorizes against the managedruleset resource type.
-                  - !Sub "arn:aws:wafv2:us-east-1:${AWS::AccountId}:global/managedruleset/*/*"
-                  - !Sub "arn:aws:amplify:${AWS::Region}:${AWS::AccountId}:apps/*"
-              - Sid: WafDisassociateForCleanup
-                # wafv2:DisassociateWebACL is evaluated by IAM without a
-                # resource (verified with the IAM policy simulator: any ARN-
-                # scoped statement yields implicitDeny; only Resource "*"
-                # allows it). With the scoped statement above it was denied
-                # during the one-click cleanup, leaving the web ACL
-                # undeletable. Bounded to us-east-1 (home of the CloudFront
-                # WAF scope) since resource-level scoping is unavailable.
-                Effect: Allow
-                Action:
-                  - wafv2:DisassociateWebACL
-                Resource: "*"
-                Condition:
-                  StringEquals:
-                    aws:RequestedRegion: us-east-1
-              - Sid: WafListWebAcls
-                # ListWebACLs does not support resource-level scoping; it is
-                # used for the idempotent find-or-create of the web ACL and is
-                # constrained to us-east-1 (home of the CloudFront WAF scope).
-                Effect: Allow
-                Action:
-                  - wafv2:ListWebACLs
-                Resource: "*"
-                Condition:
-                  StringEquals:
-                    aws:RequestedRegion: us-east-1
-              - Sid: IamForDeploy
-                Effect: Allow
-                Action:
-                  - iam:CreateRole
-                  - iam:DeleteRole
-                  - iam:GetRole
-                  - iam:TagRole
-                  - iam:UpdateAssumeRolePolicy
-                  - iam:PutRolePolicy
-                  - iam:DeleteRolePolicy
-                  - iam:ListRolePolicies
-                  - iam:GetRolePolicy
-                  - iam:AttachRolePolicy
-                  - iam:DetachRolePolicy
-                  - iam:ListAttachedRolePolicies
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/residency-chatbot-*"
-              - Sid: PassProjectRolesOnly
-                Effect: Allow
-                Action:
-                  - iam:PassRole
-                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/residency-chatbot-*"
-                Condition:
-                  StringEquals:
-                    iam:PassedToService:
-                      - lambda.amazonaws.com
-                      - rds.amazonaws.com
-                      - bedrock-agentcore.amazonaws.com
+      ManagedPolicyArns:
+        - !Ref DeployPolicyProjectResources
+        - !Ref DeployPolicyGeneratedIdResources
+        - !Ref DeployPolicyKmsWafIam
 
   # ---------------------------------------------------------------------------
   # CodeBuild project — Docker-enabled (privilegedMode) so it can build the

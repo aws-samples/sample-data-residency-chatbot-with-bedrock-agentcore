@@ -36,11 +36,22 @@ ROUTE_TABLE_NAME = f"{PROJECT}-private-rt"
 ec2 = boto3.client("ec2", region_name=REGION)
 
 
-def _tag(resource_id: str, name: str) -> None:
-    ec2.create_tags(Resources=[resource_id], Tags=[
-        {"Key": "Name", "Value": name},
-        *[{"Key": k, "Value": v} for k, v in TAGS_MAP.items()],
-    ])
+def _tags(name: str) -> list[dict]:
+    """Name + Project tags applied to every network resource."""
+    return [{"Key": "Name", "Value": name},
+            *[{"Key": k, "Value": v} for k, v in TAGS_MAP.items()]]
+
+
+def _tag_spec(resource_type: str, name: str) -> list[dict]:
+    """TagSpecifications for tag-ON-CREATE.
+
+    Tagging atomically at creation (rather than a follow-up create_tags call)
+    lets the deploy role's IAM policy require the Project tag in the request
+    (aws:RequestTag) and later restrict modify/delete to project-tagged
+    resources (aws:ResourceTag) — least privilege for resources whose ids are
+    only known after creation.
+    """
+    return [{"ResourceType": resource_type, "Tags": _tags(name)}]
 
 
 def _find_vpc() -> str | None:
@@ -55,12 +66,13 @@ def ensure_vpc() -> str:
     if existing:
         print(f"[skip] VPC {VPC_NAME} exists: {existing}")
         return existing
-    vpc_id = ec2.create_vpc(CidrBlock=VPC_CIDR)["Vpc"]["VpcId"]
+    vpc_id = ec2.create_vpc(
+        CidrBlock=VPC_CIDR, TagSpecifications=_tag_spec("vpc", VPC_NAME),
+    )["Vpc"]["VpcId"]
     ec2.get_waiter("vpc_available").wait(VpcIds=[vpc_id])
     # Private DNS resolution is required for interface-endpoint private DNS.
     ec2.modify_vpc_attribute(VpcId=vpc_id, EnableDnsSupport={"Value": True})
     ec2.modify_vpc_attribute(VpcId=vpc_id, EnableDnsHostnames={"Value": True})
-    _tag(vpc_id, VPC_NAME)
     print(f"[create] VPC {VPC_NAME} ({VPC_CIDR}): {vpc_id}")
     return vpc_id
 
@@ -83,9 +95,7 @@ def ensure_private_subnets(vpc_id: str) -> list[str]:
             continue
         resp = ec2.create_subnet(
             VpcId=vpc_id, CidrBlock=s["cidr"], AvailabilityZone=s["az"],
-            TagSpecifications=[{"ResourceType": "subnet", "Tags": [
-                {"Key": "Name", "Value": s["name"]},
-                *[{"Key": k, "Value": v} for k, v in TAGS_MAP.items()]]}],
+            TagSpecifications=_tag_spec("subnet", s["name"]),
         )
         sid = resp["Subnet"]["SubnetId"]
         ec2.modify_subnet_attribute(SubnetId=sid, MapPublicIpOnLaunch={"Value": False})
@@ -103,8 +113,9 @@ def ensure_private_route_table(vpc_id: str, subnet_ids: list[str]) -> str:
         rt_id = rts[0]["RouteTableId"]
         print(f"[skip] private route table exists: {rt_id}")
     else:
-        rt_id = ec2.create_route_table(VpcId=vpc_id)["RouteTable"]["RouteTableId"]
-        _tag(rt_id, ROUTE_TABLE_NAME)
+        rt_id = ec2.create_route_table(
+            VpcId=vpc_id, TagSpecifications=_tag_spec("route-table", ROUTE_TABLE_NAME),
+        )["RouteTable"]["RouteTableId"]
         print(f"[create] private route table: {rt_id} (no 0.0.0.0/0 route)")
     assoc = ec2.describe_route_tables(RouteTableIds=[rt_id])["RouteTables"][0].get("Associations", [])
     assoc_subnets = {a.get("SubnetId") for a in assoc}
@@ -123,8 +134,10 @@ def _ensure_sg(vpc_id: str, name: str, desc: str) -> str:
     if existing:
         print(f"[skip] SG {name} exists: {existing[0]['GroupId']}")
         return existing[0]["GroupId"]
-    sg_id = ec2.create_security_group(GroupName=name, Description=desc, VpcId=vpc_id)["GroupId"]
-    _tag(sg_id, name)
+    sg_id = ec2.create_security_group(
+        GroupName=name, Description=desc, VpcId=vpc_id,
+        TagSpecifications=_tag_spec("security-group", name),
+    )["GroupId"]
     print(f"[create] SG {name}: {sg_id}")
     return sg_id
 
@@ -199,9 +212,7 @@ def ensure_s3_gateway_endpoint(vpc_id: str, route_table_id: str) -> str:
         VpcId=vpc_id,
         ServiceName=service,
         RouteTableIds=[route_table_id],
-        TagSpecifications=[{"ResourceType": "vpc-endpoint", "Tags": [
-            {"Key": "Name", "Value": f"{PROJECT}-s3-endpoint"},
-            *[{"Key": k, "Value": v} for k, v in TAGS_MAP.items()]]}],
+        TagSpecifications=_tag_spec("vpc-endpoint", f"{PROJECT}-s3-endpoint"),
     )["VpcEndpoint"]
     print(f"[create] S3 gateway endpoint: {created['VpcEndpointId']}")
     return created["VpcEndpointId"]
