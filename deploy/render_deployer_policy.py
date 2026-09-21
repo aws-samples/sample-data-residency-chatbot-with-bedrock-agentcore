@@ -9,13 +9,16 @@ human or CI identity running deploy.py (Option B) gets EXACTLY the same
 permissions as the launcher, no more.
 
 Usage:
-    uv run python deploy/render_deployer_policy.py --account 123456789012 > deployer-policy.json
-    # Attach as an INLINE policy on a dedicated deploy role (the document is
-    # ~7 KB: over the 6,144-char customer-managed-policy limit, under the
-    # 10,240-char role-inline limit). See DEPLOYMENT.md for the full steps.
-    aws iam put-role-policy --role-name residency-chatbot-deployer \
-        --policy-name residency-chatbot-deploy-permissions \
-        --policy-document file://deployer-policy.json
+    uv run python deploy/render_deployer_policy.py --account 123456789012 --out-dir ./policies
+    # Writes one JSON file per managed policy (the launcher role attaches three,
+    # each under IAM's 6,144-char managed-policy limit). Create each as a
+    # customer-managed policy and attach it to a dedicated deploy role. See
+    # DEPLOYMENT.md for the full steps.
+    for f in ./policies/*.json; do
+      arn=$(aws iam create-policy --policy-name "residency-chatbot-$(basename "$f" .json)" \
+            --policy-document "file://$f" --query Policy.Arn --output text)
+      aws iam attach-role-policy --role-name residency-chatbot-deployer --policy-arn "$arn"
+    done
 
 The ReadSourceBundle statement is dropped because it only covers reading the
 source bundle from S3 for the CodeBuild launcher and does not apply to a local
@@ -103,25 +106,64 @@ def _resolve(value, account: str):
     return value
 
 
-def render(account: str) -> dict:
+IAM_MANAGED_POLICY_LIMIT = 6144  # chars, whitespace excluded, per managed policy
+
+
+def _iam_size(doc: dict) -> int:
+    """Policy size as IAM counts it: JSON characters excluding whitespace."""
+    return len(re.sub(r"\s", "", json.dumps(doc)))
+
+
+def render(account: str) -> list[tuple[str, dict]]:
+    """Return [(policy_name, policy_document), ...] — one per managed policy.
+
+    The launcher attaches its permissions to the CodeBuild role as several
+    AWS::IAM::ManagedPolicy resources (IAM caps a role's aggregate INLINE
+    policy size at 10,240 chars, too small for a fully scoped document, while
+    each customer-managed policy gets its own 6,144-char budget). The deployer
+    gets the same split. Every rendered document is size-checked so a template
+    edit can never produce a policy IAM will reject.
+    """
     tpl = _load_template(TEMPLATE)
-    role = tpl["Resources"]["CodeBuildRole"]["Properties"]
-    doc = role["Policies"][0]["PolicyDocument"]
-    statements = [
-        _resolve(s, account) for s in doc["Statement"]
-        if s.get("Sid") not in LAUNCHER_ONLY_SIDS
-    ]
-    return {"Version": "2012-10-17", "Statement": statements}
+    resources = tpl["Resources"]
+    role = resources["CodeBuildRole"]["Properties"]
+    rendered = []
+    for ref in role["ManagedPolicyArns"]:
+        logical_id = ref["Ref"] if isinstance(ref, dict) else ref
+        pol = resources[logical_id]
+        if pol.get("Type") != "AWS::IAM::ManagedPolicy":
+            continue  # AWS-managed ARN strings, if any, are not rendered
+        statements = [
+            _resolve(s, account) for s in pol["Properties"]["PolicyDocument"]["Statement"]
+            if s.get("Sid") not in LAUNCHER_ONLY_SIDS
+        ]
+        doc = {"Version": "2012-10-17", "Statement": statements}
+        size = _iam_size(doc)
+        if size > IAM_MANAGED_POLICY_LIMIT:
+            raise SystemExit(
+                f"{logical_id}: {size} chars exceeds the IAM managed-policy limit "
+                f"of {IAM_MANAGED_POLICY_LIMIT}; move statements to another policy"
+            )
+        rendered.append((logical_id, doc))
+    return rendered
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--account", required=True, help="12-digit AWS account id")
+    ap.add_argument("--out-dir", default=".",
+                    help="directory to write <policy-name>.json files into (default: cwd)")
     args = ap.parse_args()
     if not (args.account.isdigit() and len(args.account) == 12):
         raise SystemExit("--account must be a 12-digit AWS account id")
-    json.dump(render(args.account), sys.stdout, indent=2)
-    sys.stdout.write("\n")
+    os.makedirs(args.out_dir, exist_ok=True)
+    for name, doc in render(args.account):
+        path = os.path.join(args.out_dir, f"{name}.json")
+        with open(path, "w") as f:
+            json.dump(doc, f, indent=2)
+            f.write("\n")
+        print(f"wrote {path}  ({_iam_size(doc)} chars, {len(doc['Statement'])} statements)",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

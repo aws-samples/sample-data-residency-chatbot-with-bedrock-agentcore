@@ -248,6 +248,10 @@ def _find_memory_id(acc) -> str | None:
                 kwargs["nextToken"] = token
             resp = acc.list_memories(**kwargs)
             for m in resp.get("memories", []):
+                # Pre-filter on the id prefix: GetMemory is scoped to this
+                # project's memories and must not be attempted on others.
+                if not m["id"].startswith("residency_chatbot_memory-"):
+                    continue
                 detail = acc.get_memory(memoryId=m["id"])["memory"]
                 if detail.get("name") == "residency_chatbot_memory":
                     return m["id"]

@@ -517,6 +517,11 @@ def _find_memory() -> dict | None:
             kwargs["nextToken"] = token
         resp = acc.list_memories(**kwargs)
         for m in resp.get("memories", []):
+            # Memory ids are "<name>-<suffix>", so pre-filter on the id: the
+            # deploy role's GetMemory is scoped to this project's memories and
+            # must never be attempted on other memories in the account.
+            if not m["id"].startswith(f"{MEMORY_NAME}-"):
+                continue
             detail = acc.get_memory(memoryId=m["id"])["memory"]
             if detail.get("name") == MEMORY_NAME:
                 return detail
