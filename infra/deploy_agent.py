@@ -202,12 +202,19 @@ def ensure_observability_policy(role_arn: str) -> None:
                     "xray:GetSamplingRules",
                     "xray:GetSamplingTargets",
                 ],
+                # These X-Ray actions do not support resource-level permissions
+                # (the service-authorization reference lists no resource type
+                # for them; AWS's own AWSXRayDaemonWriteAccess policy uses "*").
+                # They only write trace data for THIS function's invocations.
                 "Resource": "*",
             },
             {
                 "Sid": "CloudWatchEMFMetrics",
                 "Effect": "Allow",
                 "Action": ["cloudwatch:PutMetricData"],
+                # PutMetricData does not support resource-level permissions;
+                # bounded instead by the namespace condition below to the two
+                # namespaces this agent emits.
                 "Resource": "*",
                 "Condition": {
                     "StringEquals": {

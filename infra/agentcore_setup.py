@@ -8,7 +8,8 @@ WHAT THIS CREATES (idempotent, safe to re-run)
   2. ONE AgentCore Gateway ``residency-chatbot-gateway`` — MCP server protocol with
      IAM inbound authorization (``authorizerType='AWS_IAM'``, SigV4). NO
      Cognito/OAuth IdP (Req 6.3, 6.4). Callers must hold
-     ``bedrock-agentcore:InvokeGateway`` (the Agent_Lambda role already does).
+     ``bedrock-agentcore:InvokeGateway`` (granted to the Agent_Lambda role by
+     this script, scoped to this gateway's ARN — see ``grant_agent_invoke``).
   3. ONE Lambda target on that gateway pointing at the existing Tool_Lambda
      (``arn:...:function:residency-chatbot-tool``), exposing FOUR per-table MCP tools
      via the target's inline ``toolSchema`` (Req 6.1, 6.2, 6.5):
@@ -47,10 +48,11 @@ Reads/writes infra/network_ids.json (load existing, ADD keys, never overwrite):
 
 Run:  uv run python infra/agentcore_setup.py   (from the repo root/)
 
-TODO(security, later): the agent role ``residency-chatbot-agent-lambda-role`` currently
-holds ``bedrock-agentcore:InvokeGateway`` on Resource "*" (see provision_iam_ddb.py).
-Once this gateway exists, tighten that statement's Resource to the gateway_arn
-printed by this script.
+Least privilege: the agent role ``residency-chatbot-agent-lambda-role`` is
+created (provision_iam_ddb.py) WITHOUT ``bedrock-agentcore:InvokeGateway``.
+This script grants it here, scoped to the exact ARN of the gateway it just
+created (inline policy ``agent-agentcore-access``), so the permission is never
+wider than the one gateway the agent is meant to call.
 """
 from __future__ import annotations
 
@@ -599,6 +601,11 @@ def main() -> None:
     memory_arn = mem["arn"]
     verify_memory(memory_id)
 
+    # Least privilege: grant the agent access to THIS gateway and THIS memory
+    # only, now that both ARNs are known (the role is created without them).
+    print()
+    grant_agent_agentcore_access(gateway_arn, memory_arn)
+
     # Save WITHOUT overwriting existing keys' unrelated values.
     ids["gateway_role_arn"] = role_arn
     ids["gateway_id"] = gateway_id
@@ -618,10 +625,47 @@ def main() -> None:
     print(f"  gateway_tool_names= {[TOOL_FOR_TABLE[t] for t in TABLES]}")
     print(f"  memory_id         = {memory_id}")
     print(f"  memory_arn        = {memory_arn}")
-    print(
-        "\nTODO(security): tighten residency-chatbot-agent-lambda-role's "
-        "bedrock-agentcore:InvokeGateway Resource from '*' to:\n  " + gateway_arn
+
+
+AGENT_ROLE = f"{PROJECT}-agent-lambda-role"
+AGENT_AGENTCORE_POLICY = "agent-agentcore-access"
+
+
+def grant_agent_agentcore_access(gateway_arn: str, memory_arn: str) -> None:
+    """Allow the Agent_Lambda role to use exactly this gateway and this memory.
+
+    Attached as its own inline policy so it is idempotent (put_role_policy
+    overwrites in place) and independent of the role's base policy, which is
+    managed by provision_iam_ddb.py. Resources are the concrete ARNs — never
+    wildcards — and the memory actions are only the two the agent calls
+    (src/agent/memory.py: create_event, list_events).
+    """
+    iam.put_role_policy(
+        RoleName=AGENT_ROLE,
+        PolicyName=AGENT_AGENTCORE_POLICY,
+        PolicyDocument=json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "InvokeThisGatewayOnly",
+                    "Effect": "Allow",
+                    "Action": ["bedrock-agentcore:InvokeGateway"],
+                    "Resource": gateway_arn,
+                },
+                {
+                    "Sid": "ThisMemoryEventsOnly",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock-agentcore:CreateEvent",
+                        "bedrock-agentcore:ListEvents",
+                    ],
+                    "Resource": memory_arn,
+                },
+            ],
+        }),
     )
+    print(f"[iam] {AGENT_ROLE}: InvokeGateway scoped to {gateway_arn}")
+    print(f"[iam] {AGENT_ROLE}: CreateEvent/ListEvents scoped to {memory_arn}")
 
 
 def _create_target_with_retry(gateway_id: str) -> str:

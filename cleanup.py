@@ -449,8 +449,11 @@ def cleanup_network() -> None:
         g["GroupId"] for g in ec2.describe_security_groups(
             Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["SecurityGroups"]
         if g.get("GroupName") != "default"]
+    # A Lambda ENI that is mid-detach can still pin the lambda SG for a few
+    # minutes after the ENI sweep above sees none left; retry patiently
+    # (observed live: a 60s window left one SG and the VPC behind).
     for sg in sgs:
-        for _ in range(6):
+        for _ in range(30):
             try:
                 ec2.delete_security_group(GroupId=sg)
                 print(f"[del] sg {sg}")
@@ -461,7 +464,17 @@ def cleanup_network() -> None:
                     continue
                 print(f"[skip] sg {sg}: {e.response['Error'].get('Code')}")
                 break
-    _try(f"vpc {vpc_id}", lambda: ec2.delete_vpc(VpcId=vpc_id))
+    for _ in range(12):
+        try:
+            ec2.delete_vpc(VpcId=vpc_id)
+            print(f"[del] vpc {vpc_id}")
+            break
+        except ClientError as e:
+            if "DependencyViolation" in str(e):
+                time.sleep(10)
+                continue
+            print(f"[skip] vpc {vpc_id}: {e.response['Error'].get('Code')}")
+            break
 
 
 def cleanup_bucket() -> None:
