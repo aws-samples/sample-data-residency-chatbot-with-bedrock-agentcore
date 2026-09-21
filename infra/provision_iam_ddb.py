@@ -166,28 +166,13 @@ def ensure_agent_role():
                     else [f"arn:aws:bedrock:{REGION}::foundation-model/*"]
                 ),
             },
-            {
-                "Sid": "AgentCoreGatewayInvoke",
-                "Effect": "Allow",
-                "Action": ["bedrock-agentcore:InvokeGateway"],
-                # Tightened to the specific gateway ARN by agentcore_setup.py once
-                # the gateway is created (it is unknown at this step).
-                "Resource": "*",
-            },
-            {
-                "Sid": "AgentCoreMemoryDataPlane",
-                "Effect": "Allow",
-                "Action": [
-                    "bedrock-agentcore:CreateEvent",
-                    "bedrock-agentcore:GetEvent",
-                    "bedrock-agentcore:ListEvents",
-                    "bedrock-agentcore:ListSessions",
-                    "bedrock-agentcore:RetrieveMemoryRecords",
-                    "bedrock-agentcore:ListMemoryRecords",
-                    "bedrock-agentcore:GetMemoryRecord",
-                ],
-                "Resource": "*",
-            },
+            # NOTE: the AgentCore permissions (bedrock-agentcore:InvokeGateway
+            # and the Memory data-plane actions CreateEvent/ListEvents) are
+            # deliberately NOT granted here. The gateway and memory do not exist
+            # yet, so their ARNs are unknown, and wildcards would be
+            # over-permissive. agentcore_setup.py attaches a separate inline
+            # policy ("agent-agentcore-access") scoped to the exact gateway and
+            # memory ARNs in the same step that creates them.
             {
                 "Sid": "WebSocketManageConnections",
                 "Effect": "Allow",

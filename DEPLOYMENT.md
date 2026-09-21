@@ -281,70 +281,50 @@ production hardening.
 
 ## IAM policy for the deploying identity
 
-The identity running `deploy.py` needs to create and manage resources across
-these services (scope down as your governance requires):
+The identity running `deploy.py` (Option B) needs the **same** permissions as
+the CodeBuild role in the one-click launcher — no more. That role's policy
+(`CodeBuildRole` in `deploy/codebuild-deploy.yaml`) is the single source of
+truth: every statement is scoped to this project's `residency-chatbot-*`
+resource names, region-constrained where the service supports it, and was
+exercised by a live end-to-end deploy and cleanup. Do not hand-write a broader
+policy; render it from the template so the two can never drift, and attach it
+as an **inline** policy on a dedicated deploy role that you assume for the
+deployment (the rendered document is ~7 KB — over the 6,144-character limit
+for a customer-managed policy but within the 10,240 limit for a role-inline
+policy, which is also how the launcher attaches it):
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "IamScopedToProjectRoles",
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole",
-        "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies",
-        "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
-        "iam:TagRole", "iam:UpdateAssumeRolePolicy"
-      ],
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/residency-chatbot-*"
-    },
-    {
-      "Sid": "PassProjectRolesOnly",
-      "Effect": "Allow",
-      "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/residency-chatbot-*",
-      "Condition": {
-        "StringEquals": {
-          "iam:PassedToService": [
-            "lambda.amazonaws.com",
-            "rds.amazonaws.com",
-            "bedrock-agentcore.amazonaws.com"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "ServiceProvisioning",
-      "Effect": "Allow",
-      "Action": [
-        "ec2:*Vpc*", "ec2:*Subnet*", "ec2:*RouteTable*", "ec2:*SecurityGroup*",
-        "ec2:*VpcEndpoint*", "ec2:DeleteNetworkInterface", "ec2:CreateTags", "ec2:Describe*",
-        "rds:*", "secretsmanager:*", "dynamodb:*",
-        "lambda:*", "ecr:*", "logs:*",
-        "apigateway:*",
-        "amplify:*", "s3:*",
-        "wafv2:*",
-        "kms:DescribeKey", "kms:CreateGrant",
-        "bedrock:ListFoundationModels", "bedrock:InvokeModel",
-        "bedrock-agentcore:*",
-        "sts:GetCallerIdentity"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
+```bash
+uv run python deploy/render_deployer_policy.py --account <ACCOUNT_ID> > deployer-policy.json
+
+# A dedicated role your identity can assume (replace the principal with your user/role ARN).
+aws iam create-role --role-name residency-chatbot-deployer \
+  --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
+    "Principal":{"AWS":"arn:aws:iam::<ACCOUNT_ID>:user/<YOUR_USER>"},"Action":"sts:AssumeRole"}]}'
+aws iam put-role-policy --role-name residency-chatbot-deployer \
+  --policy-name residency-chatbot-deploy-permissions \
+  --policy-document file://deployer-policy.json
+
+# Run the deploy under that role (e.g. via a named profile with role_arn set).
+AWS_PROFILE=residency-chatbot-deployer uv run python deploy.py
 ```
 
-Replace `<ACCOUNT_ID>` with your 12-digit account id. `iam:PassRole` is
-restricted to the project's `residency-chatbot-*` roles and the services they are
-passed to; for the tightest posture, also scope the `ServiceProvisioning`
-statement to `residency-chatbot-*` ARNs per service, as done in
-`deploy/codebuild-deploy.yaml`. Note `wafv2:*` is exercised in `us-east-1`
-(Amplify's firewall integration requires the web ACL in the global CloudFront
-scope), so don't pin this policy to `ap-south-1` with a region condition —
-`deploy/codebuild-deploy.yaml` shows the scoped-down equivalent
-(`WafForAmplifyUi` / `WafListWebAcls` statements).
+What the rendered policy contains, by statement (see the template for the
+exact actions and ARNs):
+
+| Statement | Scope |
+|-----------|-------|
+| `Logs` | CloudWatch log groups `/aws/lambda/residency-chatbot-*` and `/aws/codebuild/residency-chatbot-*` |
+| `ProjectS3` | buckets `residency-chatbot-*` only |
+| `ProjectSecrets`, `RdsManagedMasterSecret` | secrets `residency-chatbot-*`; create/tag only on the RDS-managed master secret |
+| `ProjectDynamoDB`, `ProjectLambda`, `ProjectEcr`, `ProjectRds` | resources named `residency-chatbot-*` in the deploy region |
+| `KmsDescribeForEncryptedAurora`, `KmsGrantsViaRdsAndSecretsManager` | `kms:DescribeKey`; `kms:CreateGrant` only via RDS / Secrets Manager for AWS resources |
+| `IamForDeploy`, `PassProjectRolesOnly` | roles `residency-chatbot-*`; `iam:PassRole` only to Lambda, RDS, and AgentCore |
+| `WafForAmplifyUi`, `WafDisassociateForCleanup`, `WafListWebAcls` | web ACL `residency-chatbot-*` in the CloudFront scope (us-east-1, required by Amplify) and this account's Amplify apps |
+| `ReadOnlyDescribes`, `EcrAuthToken`, `CreateTimeIdResources` | actions whose resource ids are generated at create time (VPC, API Gateway, Amplify, AgentCore) or that do not support resource-level scoping; each is constrained to the deploy region with `aws:RequestedRegion` |
+
+The `WafDisassociateForCleanup` and `WafListWebAcls` statements use
+`Resource: "*"` because AWS WAF evaluates those two actions without a resource
+(verified with the IAM policy simulator); both are bounded to `us-east-1`.
 
 ## Documentation
 
