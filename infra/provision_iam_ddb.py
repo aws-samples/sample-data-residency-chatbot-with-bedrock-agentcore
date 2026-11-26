@@ -148,6 +148,10 @@ def ensure_tool_role(ids):
 
 def ensure_agent_role():
     """Agent_Lambda: OUT of VPC; Bedrock + AgentCore (gateway/memory) + WS @connections."""
+    if not MODEL_ARN:
+        raise SystemExit("model_id is not configured. Set model_id in "
+            "deploy.config.json (or CHATBOT_MODEL_ID) before provisioning IAM: "
+            "the Agent_Lambda role is scoped to that single foundation model.")
     arn = _ensure_role(AGENT_ROLE, "chatbot Agent_Lambda (Bedrock + AgentCore + WS)")
     _attach_managed(AGENT_ROLE, "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole")
 
@@ -158,13 +162,10 @@ def ensure_agent_role():
                 "Sid": "BedrockInvokeInRegion",
                 "Effect": "Allow",
                 "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
-                # Any same-region foundation model (model-agnostic solution;
-                # the configured ON_DEMAND model ARN is included when set).
-                "Resource": (
-                    [MODEL_ARN, f"arn:aws:bedrock:{REGION}::foundation-model/*"]
-                    if MODEL_ARN
-                    else [f"arn:aws:bedrock:{REGION}::foundation-model/*"]
-                ),
+                # Least privilege: only the configured in-region foundation
+                # model. No inference-profile ARNs, so cross-Region profiles
+                # fail authorization. Re-run this step if you change model_id.
+                "Resource": [MODEL_ARN],
             },
             # NOTE: the AgentCore permissions (bedrock-agentcore:InvokeGateway
             # and the Memory data-plane actions CreateEvent/ListEvents) are

@@ -374,11 +374,12 @@ Resources:
             StringEquals:
               aws:RequestedRegion: !Ref AWS::Region
         - Sid: BedrockInvokeInRegion
-          # Preflight/verification invoke of the configured in-region model.
+          # Preflight/verification invoke of the configured model only (the
+          # ModelId parameter); no other foundation model, no inference profiles.
           Effect: Allow
           Action:
             - bedrock:InvokeModel
-          Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/*"
+          Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/${ModelId}"
         - Sid: AgentCoreProjectResources
           # Gateway/memory/workload-identity ids are generated at create
           # time but embed the project name; bounded to those ARN

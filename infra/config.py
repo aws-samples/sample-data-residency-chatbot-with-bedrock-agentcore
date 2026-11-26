@@ -113,8 +113,9 @@ DATA_PREFIX = _resolve("CHATBOT_DATA_PREFIX", "data_prefix", "chatbot-load")
 
 MODEL_ID = _resolve("CHATBOT_MODEL_ID", "model_id", "")
 
-# Foundation-model ARN the Agent_Lambda role is allowed to invoke (empty until
-# a model is configured; the role also allows same-region foundation-model/*).
+# Foundation-model ARN the Agent_Lambda role is allowed to invoke. The role is
+# scoped to this ARN only (empty until a model is configured; provisioning IAM
+# then fails fast rather than writing an invalid policy).
 MODEL_ARN = (
     f"arn:aws:bedrock:{REGION}::foundation-model/{MODEL_ID}" if MODEL_ID else ""
 )

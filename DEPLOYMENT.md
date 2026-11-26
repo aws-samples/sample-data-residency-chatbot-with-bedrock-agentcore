@@ -144,7 +144,7 @@ The orchestrator runs these steps in order (each idempotent; ids written to
 | 2 | provision_network | fresh VPC, private subnets, SGs, Secrets + S3 VPC endpoints |
 | 3 | provision_aurora | Aurora PostgreSQL Serverless v2 (private) |
 | 4 | wait_aurora | wait for availability, capture endpoint + master secret |
-| 5 | provision_iam_ddb | IAM roles + DynamoDB connections table |
+| 5 | provision_iam_ddb | IAM roles (the Agent_Lambda role's Bedrock permission is scoped to the configured `model_id` only; re-run this step after changing the model) + DynamoDB connections table |
 | 6 | deploy_bootstrap | create 4 tables + read-only DB user |
 | 7 | deploy_loader | create/upload data bucket + bulk-load the sample data |
 | 8 | deploy_tool | Tool_Lambda (in-VPC, read-only) |
@@ -294,6 +294,8 @@ exceeds; each managed policy gets its own 6,144-character budget). The renderer
 writes one file per policy and checks each against that limit:
 
 ```bash
+# The Bedrock statement is scoped to the configured model; the renderer reads it
+# from --model-id, CHATBOT_MODEL_ID, or model_id in deploy.config.json.
 uv run python deploy/render_deployer_policy.py --account <ACCOUNT_ID> --out-dir ./policies
 
 # A dedicated role your identity can assume (replace the principal with your user/role ARN).
