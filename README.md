@@ -8,7 +8,7 @@ What makes this different from general natural-language-to-SQL solutions is the 
 
 ## Architecture
 
-![Data-residency chatbot · AWS architecture (ap-south-1, Mumbai)](docs/architecture.png)
+<img width="3023" height="1685" alt="image" src="https://github.com/user-attachments/assets/50cf451a-a210-49b4-946c-6c33a94b50db" />
 
 Everything runs inside `ap-south-1` (Mumbai). The only component outside the Region is the user's browser, and it only ever receives the final natural-language answer — never raw program data. No CloudFront distribution or other global data-path services in the program-data flow; Bedrock is invoked in-region with a bare ON_DEMAND `modelId`. The one global *configuration* resource is the AWS WAF web ACL that fronts the Amplify UI: Amplify's firewall integration requires it in the global (CloudFront) scope. It contains firewall rules only — no program data is stored or processed in it (see [Data residency & the Amplify firewall](DEPLOYMENT.md#data-residency--amplify)).
 
