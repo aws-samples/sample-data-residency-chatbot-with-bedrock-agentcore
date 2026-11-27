@@ -237,7 +237,11 @@ def _env(ids: dict) -> dict:
     return {
         "Variables": {
             "REGION": REGION,
-            "MODEL_ID": ids.get("model_id", MODEL_ID),
+            # The currently configured model wins over the one saved in
+            # network_ids.json, so the function always targets the same model
+            # ARN that provision_iam_ddb.py scoped the role to. Falling back to
+            # the saved id only covers a run with no model configured.
+            "MODEL_ID": MODEL_ID or ids.get("model_id", ""),
             "GATEWAY_URL": ids["gateway_url"],
             "MEMORY_ID": ids["memory_id"],
             "ACTOR_ID": "demo-user",

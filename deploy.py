@@ -156,14 +156,30 @@ def _check_bedrock_model_access() -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] could not list foundation models: {exc}")
         return
-    ids = {m["modelId"] for m in models}
-    if MODEL_ID not in ids:
+    by_id = {m["modelId"]: m for m in models}
+    if MODEL_ID not in by_id:
         raise SystemExit(
             f"PREFLIGHT FAIL: model {MODEL_ID} is not available in {REGION}. "
             f"Pick a bare ON_DEMAND modelId available in-region: "
             f"https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html"
         )
-    print(f"Bedrock model  : {MODEL_ID} present in-region")
+    # Existing in-region is not enough: a model that is offered only through an
+    # inference profile (common for Anthropic and Amazon Nova text models in
+    # some Regions) would pass here, deploy cleanly, and then fail on the first
+    # invoke with a ValidationException. Require in-Region on-demand support.
+    inference_types = by_id[MODEL_ID].get("inferenceTypesSupported", [])
+    if "ON_DEMAND" not in inference_types:
+        raise SystemExit(
+            f"PREFLIGHT FAIL: model {MODEL_ID} does not support ON_DEMAND "
+            f"invocation in {REGION} (inferenceTypesSupported="
+            f"{inference_types or ['none']}). It is reachable only through a "
+            f"cross-Region inference profile, which this solution does not use. "
+            f"Pick a model whose inferenceTypesSupported includes ON_DEMAND:\n"
+            f"  aws bedrock list-foundation-models --region {REGION} "
+            f"--by-inference-type ON_DEMAND --query "
+            f"\"modelSummaries[?contains(outputModalities,'TEXT')].modelId\""
+        )
+    print(f"Bedrock model  : {MODEL_ID} present in-region, ON_DEMAND supported")
     print(
         "  NOTE: ensure model ACCESS is enabled in the Bedrock console "
         "(Model access → the configured model). Without it the first "
