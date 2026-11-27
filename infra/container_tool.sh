@@ -27,6 +27,12 @@ case "${1:-}" in
     exec "$TOOL" login --username AWS --password-stdin "$ECR_REGISTRY"
     ;;
   build)
+    # Docker 28+/BuildKit attaches provenance and SBOM attestations by default,
+    # which turns the pushed image into an OCI index with extra
+    # "unknown/unknown" manifests. Lambda rejects that ("image manifest, config
+    # or layer media type ... is not supported"). Disable the attestations so a
+    # single-platform image is produced. finch ignores this variable.
+    export BUILDX_NO_DEFAULT_ATTESTATIONS=1
     exec "$TOOL" build -f "$DOCKERFILE" -t "$LOCAL_TAG" --platform linux/amd64 "$BUILD_CONTEXT"
     ;;
   push)

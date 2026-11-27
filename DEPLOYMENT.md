@@ -83,7 +83,7 @@ The rest of this document covers Option B (run `deploy.py` directly).
 |-------------|-------|
 | AWS account + credentials | Configured for `ap-south-1` (e.g. `aws configure` or `AWS_PROFILE`). |
 | `uv` | Python package manager (Python 3.12/3.13). |
-| `finch` (or Docker) | Container build for the Agent_Lambda image. For finch run `finch vm start` once; for Docker set `CONTAINER_TOOL=docker`. |
+| `finch` (or Docker) | Container build for the Agent_Lambda image. For finch run `finch vm start` once; for Docker set `CONTAINER_TOOL=docker`. The build script disables BuildKit's default provenance/SBOM attestations (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`), because Docker 28+ otherwise pushes an OCI image index that Lambda rejects. |
 | IAM permissions | The deploying identity needs the permissions in [IAM policy](#iam-policy-for-the-deploying-identity) below. |
 
 Run the pre-flight checklist in [PREFLIGHT.md](PREFLIGHT.md) first. `deploy.py`

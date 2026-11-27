@@ -41,6 +41,33 @@ Each control addresses a different way that data or inference could leave the ta
 | 4. Authenticated tool gateway | AgentCore Gateway uses IAM inbound authorization, so each MCP call must be SigV4-signed. Only the Agent Lambda role is granted `bedrock-agentcore:InvokeGateway`, and only on this gateway's ARN. The gateway's service role can invoke only the Tool Lambda function. | `infra/agentcore_setup.py`, `src/agent/sigv4.py` |
 | 5. Regional data path | API Gateway (REST, regional endpoint), both Lambda functions, Bedrock, AgentCore Gateway and Memory, Aurora, and Secrets Manager run in `ap-south-1`. No edge-optimized API endpoints or AWS Global Accelerator. The global pieces (Amplify's CloudFront edge, the WAF web ACL, IAM, DNS) carry configuration and static files only. | whole stack |
 
+The Agent Lambda function's permissions are scoped to the resources it uses. With `MODEL_ID` set to the model you chose at deployment, the policy that `infra/provision_iam_ddb.py` and `infra/agentcore_setup.py` attach looks like this:
+
+```json
+{
+  "Statement": [
+    {
+      "Sid": "BedrockInvokeInRegion",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": "arn:aws:bedrock:ap-south-1::foundation-model/MODEL_ID"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "bedrock-agentcore:InvokeGateway",
+      "Resource": "arn:aws:bedrock-agentcore:ap-south-1:111122223333:gateway/GATEWAY_ID"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["bedrock-agentcore:CreateEvent", "bedrock-agentcore:ListEvents"],
+      "Resource": "arn:aws:bedrock-agentcore:ap-south-1:111122223333:memory/MEMORY_ID"
+    }
+  ]
+}
+```
+
+There is no wildcard over other foundation models and no inference-profile ARN, so a call that uses a cross-Region profile ID fails authorization even if the residency guard were bypassed.
+
 These controls apply to data-plane processing. Check with your legal and compliance teams whether they meet your requirements.
 
 ## Deploying the solution
