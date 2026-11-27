@@ -86,12 +86,19 @@ The deployment uses an AWS CloudFormation stack that starts an AWS CodeBuild pro
 There is no default model; you pick one, and the Agent Lambda IAM role is scoped to that model's ARN at deployment.
 
 1. Open [Model support by AWS Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) and pick a model that is available in `ap-south-1` with a base model ID (no `us.`/`eu.`/`ap.`/`apac.`/`jp.`/`au.`/`global.` inference-profile prefix) and Converse tool-use support. The residency guard rejects inference-profile IDs.
-2. Confirm it supports in-Region on-demand invocation. The output must include `ON_DEMAND`:
+2. Confirm it supports in-Region on-demand invocation. The output must include `ON_DEMAND`; the deploy preflight fails fast if it doesn't:
    ```bash
    aws bedrock list-foundation-models --region ap-south-1 \
      --query "modelSummaries[?modelId=='<your-model-id>'].{id:modelId,inf:inferenceTypesSupported}"
    ```
+   To list every on-demand text model in the Region instead:
+   ```bash
+   aws bedrock list-foundation-models --region ap-south-1 --by-inference-type ON_DEMAND \
+     --query "modelSummaries[?contains(outputModalities,'TEXT')].modelId" --output text
+   ```
 3. Enable access for it in the Bedrock console → Model access (Region `ap-south-1`). Without it the first invoke returns `AccessDeniedException`.
+
+**Tested model.** Tool-calling reliability varies a lot between on-demand models, and a model that ignores the tool will invent plausible-looking numbers. `qwen.qwen3-235b-a22b-2507-v1:0` answered correctly against the sample database in every test run (counts, follow-ups through Memory, and out-of-scope refusals) and is the model this repository was last verified with. Whatever you choose, check the first few answers against the data before you trust them; the sample data has 400 rows per table, and the top state by applications is Maharashtra with 169, so a very different number means the model answered without calling the tool. As of this writing, Anthropic and Amazon Nova text models in `ap-south-1` are offered only through inference profiles and so can't be used with this sample there.
 
 ### Option A — CloudFormation launcher (recommended)
 
