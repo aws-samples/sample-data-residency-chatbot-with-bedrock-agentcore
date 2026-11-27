@@ -2,7 +2,11 @@
 name = "residency-agentcore-chatbot"
 version = "0.1.0"
 description = "Data-residency-compliant NL chatbot on Amazon Bedrock AgentCore (ap-south-1)"
-requires-python = ">=3.13"
+# Upper bound on purpose: `uv sync` on a fresh machine (and in the CodeBuild
+# launcher) otherwise downloads the newest CPython, and compiled wheels such as
+# psycopg-binary lag new releases by months. .python-version pins the exact
+# interpreter; raise both together once the wheels exist.
+requires-python = ">=3.13,<3.15"
 dependencies = [
     "boto3",
     "strands-agents",
