@@ -1,44 +1,84 @@
 # Data-residency chatbot with Amazon Bedrock AgentCore
 
-A data-residency-compliant natural-language chatbot pattern: ask plain-English questions and get answers computed from structured data in Aurora PostgreSQL — without writing SQL, and with all data and AI inference staying within a single AWS Region (`ap-south-1`, Mumbai).
+A natural-language chatbot that answers questions from a database while the services that process prompts, model output, and query results run in one AWS Region (`ap-south-1`, Mumbai). Users ask plain-English questions and get answers computed from structured data in Amazon Aurora PostgreSQL-Compatible Edition, without anyone writing SQL.
 
-The pattern is demonstrated with a rooftop-solar subsidy program as the reference use case, deployed with fully synthetic sample data. The residency controls and the governed text-to-SQL security design are applicable to any sector or geography with similar requirements (see [Adapting to your Region](#adapting-to-your-region-and-use-case)).
+The pattern was built for a national rooftop-solar subsidy program in India and is demonstrated here with fully synthetic sample data. India has two AWS Regions, Mumbai and Hyderabad; this sample keeps processing in one Region because a single-Region data path is the simplest to audit and some workloads require it. The residency controls and the governed text-to-SQL design aren't specific to India, and you can adapt them for other sectors and geographies (see [Adapting to your Region](#adapting-to-your-region-and-use-case)).
 
-What makes this different from general natural-language-to-SQL solutions is the combination: single-Region residency enforced at every layer (model invocation, network, hosting) plus governed, whitelist-validated text-to-SQL on Bedrock AgentCore — not just query generation.
+Two things set it apart from a plain text-to-SQL chatbot: processing is kept in one Region at the model, network, tool, and service layers, and the model never writes SQL. It chooses one of four read-only tools and fills in a structured request, and the tool code builds a parameterized query from an allowlist.
+
+The companion blog post walks through the design in detail: five data-residency controls, the governed text-to-SQL security design, a comparison with Amazon Bedrock Knowledge Bases, and compliance considerations.
 
 ## Architecture
 
 <img width="3023" height="1685" alt="image" src="https://github.com/user-attachments/assets/50cf451a-a210-49b4-946c-6c33a94b50db" />
 
-Everything runs inside `ap-south-1` (Mumbai). The only component outside the Region is the user's browser, and it only ever receives the final natural-language answer — never raw program data. No CloudFront distribution or other global data-path services in the program-data flow; Bedrock is invoked in-region with a bare ON_DEMAND `modelId`. The one global *configuration* resource is the AWS WAF web ACL that fronts the Amplify UI: Amplify's firewall integration requires it in the global (CloudFront) scope. It contains firewall rules only — no program data is stored or processed in it (see [Data residency & the Amplify firewall](DEPLOYMENT.md#data-residency--amplify)).
+*Figure 1: Target architecture. The numbered arrows match the steps below.*
 
-> **Note on the transport:** the system supports two entry points behind API Gateway. The **REST API** (`POST /chat`, request/response) is the default the demo deploy wires up and what the UI calls out of the box. A **WebSocket API** (`wss://`) is the production transport — deploy it with `deploy.py --with-websocket`. Every other box (Agent_Lambda, Bedrock, AgentCore Gateway/Memory, Tool_Lambda, Aurora, Secrets Manager) is identical for both.
+The solution uses an agent built with the open source [Strands Agents SDK](https://strandsagents.com/), running in AWS Lambda. The agent uses two Amazon Bedrock AgentCore services: AgentCore Gateway, which exposes the database query tools, and AgentCore Memory, which stores conversation history for follow-up questions. Each step that processes the prompt, model output, or query results runs in `ap-south-1`.
 
-## Quick start (deploy to your account)
+1. The user opens the web UI. AWS Amplify Hosting serves the static page files. These files don't contain program data.
+2. The browser sends the question to an Amazon API Gateway REST API with a regional endpoint in `ap-south-1`. The sample API has no authorizer so that you can try it quickly. Don't use it as is in production (see [Before you use this in production](#before-you-use-this-in-production)).
+3. API Gateway invokes the Agent Lambda function. When the function starts, a residency guard checks the configured model ID (`src/agent/residency.py`).
+4. The agent loads earlier turns of the conversation from AgentCore Memory.
+5. The agent sends the question and the tool definitions to Amazon Bedrock in `ap-south-1`, using a model that supports in-Region on-demand invocation. The model chooses a tool and its parameters.
+6. The agent calls the tool through AgentCore Gateway over Model Context Protocol (MCP), with requests signed using AWS Signature Version 4 (SigV4). The gateway invokes the Tool Lambda function, which runs in private VPC subnets with no route to the internet.
+7. The Tool Lambda function checks the request against an allowlist, reads read-only database credentials from AWS Secrets Manager through a VPC endpoint, builds a parameterized `SELECT` query, and runs it against Aurora PostgreSQL.
+8. The results return through AgentCore Gateway to the agent. The agent sends them to Amazon Bedrock to write the answer, saves the turn to AgentCore Memory, and returns the answer through API Gateway to the browser.
 
-Both options deploy the full stack to `ap-south-1` and end with a live Amplify URL. The deploy ships with small synthetic sample data (zero real PII); swap in your own CSVs anytime.
+Some parts of the architecture are global, and none of them process program data: Amplify Hosting serves the static UI files through Amazon CloudFront edge locations (questions and answers go directly between the browser and the regional API); the AWS WAF web ACL that protects the Amplify app must use the global (CloudFront) scope, holds firewall rules only, and has request sampling turned off; IAM stores roles and policies; and DNS resolution happens wherever the user's resolver is. See [Data residency & the Amplify firewall](DEPLOYMENT.md#data-residency--amplify).
 
-### Step 0 — choose your model (required for both options)
+> **Transport note:** the REST API (`POST /chat`, request/response) is what the deployment wires up and what the UI calls. An optional WebSocket API (`wss://`) exists for longer-running conversations — deploy it with `deploy.py --with-websocket`. Every other component is identical for both.
 
-The solution is model-agnostic: there is no default model, you pick one.
+## Five data-residency controls
 
-1. Open the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page and pick a model that is available in `ap-south-1` with a bare ON_DEMAND `modelId` (no `us.`/`eu.`/`ap.`/`apac.`/`jp.`/`au.`/`global.` prefix) and Converse tool-use support. Cross-region inference-profile ids are rejected by the residency guard.
-2. Verify it is invocable ON_DEMAND in-region:
+Each control addresses a different way that data or inference could leave the target Region. The blog post explains each one in depth; the summary:
+
+| Control | What it does | Where |
+|---------|--------------|-------|
+| 1. In-Region on-demand invocation | The agent calls Bedrock with a base model ID (no `us.`/`eu.`/`apac.`/`global.` inference-profile prefix) through a client set to `ap-south-1`. The Agent Lambda IAM role allows `bedrock:InvokeModel` only on the ARN of the model you configure at deployment, with no inference-profile ARNs, so a call that uses a profile ID fails authorization. | `src/agent/handler.py`, `infra/provision_iam_ddb.py` |
+| 2. Cold-start residency guard | At startup the function raises if the model ID starts with a known cross-Region profile prefix, so a configuration mistake fails loudly instead of moving inference silently. It is a fast first check; the IAM policy in Control 1 is the enforcement point. An AWS Organizations SCP that denies `bedrock:InvokeModel*` on `inference-profile/*` adds an account-level backstop. | `src/agent/residency.py` |
+| 3. Network isolation for database access | The Tool Lambda function is the only component with database credentials. It runs in private subnets with no internet gateway, no NAT gateway, and no route to the internet; it reaches Aurora on 5432 and Secrets Manager through an interface VPC endpoint, with security-group rules that reference security groups rather than CIDR ranges. The Agent Lambda function runs outside the VPC, has no database credentials, and is not accepted by the Aurora security group. | `infra/provision_network.py` |
+| 4. Authenticated tool gateway | AgentCore Gateway uses IAM inbound authorization, so each MCP call must be SigV4-signed. Only the Agent Lambda role is granted `bedrock-agentcore:InvokeGateway`, and only on this gateway's ARN. The gateway's service role can invoke only the Tool Lambda function. | `infra/agentcore_setup.py`, `src/agent/sigv4.py` |
+| 5. Regional data path | API Gateway (REST, regional endpoint), both Lambda functions, Bedrock, AgentCore Gateway and Memory, Aurora, and Secrets Manager run in `ap-south-1`. No edge-optimized API endpoints or AWS Global Accelerator. The global pieces (Amplify's CloudFront edge, the WAF web ACL, IAM, DNS) carry configuration and static files only. | whole stack |
+
+These controls apply to data-plane processing. Check with your legal and compliance teams whether they meet your requirements.
+
+## Deploying the solution
+
+The deployment uses an AWS CloudFormation stack that starts an AWS CodeBuild project. The project builds the agent container image, creates the VPC and Aurora database, configures the AgentCore resources, and deploys the Amplify-hosted UI. Deployment takes about 15 minutes and ends with a live Amplify URL. The sample ships with small synthetic data (no real PII). The full guide, including running `deploy.py` from your own machine, is in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+### Prerequisites
+
+- An AWS account with permission to create CloudFormation stacks with named IAM resources. This sample uses `ap-south-1`. To use another Region, first confirm that AgentCore Gateway, AgentCore Memory, and an in-Region model are available there (see [Adapting to your Region](#adapting-to-your-region-and-use-case)).
+- The [AWS Command Line Interface (AWS CLI)](https://aws.amazon.com/cli/) version 2.
+- Model access enabled in the Amazon Bedrock console for a model that supports in-Region on-demand invocation (next section).
+- An Amazon S3 bucket in the target Region for the source bundle.
+
+### Step 0 — choose your model
+
+There is no default model; you pick one, and the Agent Lambda IAM role is scoped to that model's ARN at deployment.
+
+1. Open [Model support by AWS Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) and pick a model that is available in `ap-south-1` with a base model ID (no `us.`/`eu.`/`ap.`/`apac.`/`jp.`/`au.`/`global.` inference-profile prefix) and Converse tool-use support. The residency guard rejects inference-profile IDs.
+2. Confirm it supports in-Region on-demand invocation. The output must include `ON_DEMAND`:
    ```bash
    aws bedrock list-foundation-models --region ap-south-1 \
      --query "modelSummaries[?modelId=='<your-model-id>'].{id:modelId,inf:inferenceTypesSupported}"
    ```
-3. Enable access for it in the Bedrock console → Model access (region `ap-south-1`). One-time console toggle; without it the first invoke returns `AccessDeniedException`.
+3. Enable access for it in the Bedrock console → Model access (Region `ap-south-1`). Without it the first invoke returns `AccessDeniedException`.
 
-### Option A — one-click CloudFormation (recommended)
+### Option A — CloudFormation launcher (recommended)
 
-No git access or local tools needed. A CodeBuild job pulls the source bundle, builds the image, and provisions everything.
+No git access or local container tooling needed. A CodeBuild job unpacks the source bundle, builds the image, and provisions everything.
 
-1. Upload the source bundle to an S3 bucket in your account:
+1. Create the source bundle from the repository root. It writes `residency-chatbot.zip`:
+   ```bash
+   bash deploy/make_bundle.sh
+   ```
+2. Upload the bundle to your S3 bucket:
    ```bash
    aws s3 cp residency-chatbot.zip s3://<your-bucket>/residency-chatbot.zip --region ap-south-1
    ```
-2. Launch the stack, passing your model id as the required `ModelId` parameter:
+3. Create the launcher stack, passing your model ID as the `ModelId` parameter:
    ```bash
    aws cloudformation create-stack --region ap-south-1 \
      --stack-name residency-chatbot-launcher \
@@ -49,9 +89,10 @@ No git access or local tools needed. A CodeBuild job pulls the source bundle, bu
      --capabilities CAPABILITY_NAMED_IAM
    ```
    (Console equivalent: upload `deploy/codebuild-deploy.yaml`, fill in `SourceBucket`, `SourceKey`, and `ModelId` on the parameters screen.)
-3. Watch progress in CodeBuild → build history for `residency-chatbot-deploy-<account>`. The Amplify URL is printed at the end of the build log.
+4. In the CodeBuild console, open the build history for `residency-chatbot-deploy-<your-account-id>`. When the build finishes, copy the Amplify URL from the end of the build log.
+5. Open the URL and ask a question, such as "Which are the top 5 states by applications?" Then ask a follow-up, such as "And in Gujarat?"
 
-### Option B — run deploy.py yourself (laptop/EC2/Cloud9 with Docker or finch)
+### Option B — run deploy.py yourself (laptop/EC2 with Docker or finch)
 
 1. Clone the repo and install dependencies:
    ```bash
@@ -69,90 +110,72 @@ No git access or local tools needed. A CodeBuild job pulls the source bundle, bu
 3. Deploy:
    ```bash
    uv run python deploy.py               # full stack, REST transport
-   # or: uv run python deploy.py --with-websocket   # also the production WSS API
+   # or: uv run python deploy.py --with-websocket   # also the optional WebSocket API
    ```
-   The preflight fails fast (before creating any resources) if no model is configured or the model is not present in `ap-south-1`. The Amplify URL is printed at the end.
+   The preflight fails fast, before creating any resources, if no model is configured or the model is not present in `ap-south-1`. The Amplify URL is printed at the end.
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide (IAM policy, prerequisites, teardown) and [PREFLIGHT.md](PREFLIGHT.md) for the manual checklist.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide (IAM policy for the deploying identity, prerequisites, teardown) and [PREFLIGHT.md](PREFLIGHT.md) for the manual checklist.
 
-### End-to-end steps (numbered to match the diagram)
+### Changing the model later
 
-1. **Load UI** — the user opens the dashboard over HTTPS; AWS WAF (the Amplify Firewall integration) inspects the request — rate-limiting floods and blocking known-bad IPs and common exploits — before AWS Amplify serves the static page (charts + chat box).
-2. **Ask** — the browser `fetch()`-POSTs the plain-English question to the API Gateway endpoint (`POST /chat`).
-3. **Route** — API Gateway invokes the Agent_Lambda (AWS_PROXY) — the Strands agent that reasons over the question.
-4. **Reason** — the agent calls Amazon Bedrock (in-region ON_DEMAND) over the Converse tool-use loop; the model decides *which* tool to call and with what parameters.
-5. **Recall** — the agent loads/saves the session's prior turns in AgentCore Memory, so follow-ups ("…and in Gujarat?") have context.
-6. **Tool call** — the chosen `query_<table>` tool call goes to the Bedrock AgentCore Gateway (MCP server) authenticated with SigV4 IAM.
-7. **Invoke Tool_Lambda** — the Gateway invokes the read-only Tool_Lambda, which runs *inside* the private VPC (the only component that can reach the database).
-8. **Query (safely)** — Tool_Lambda validates the request against a strict whitelist, builds a SELECT-only parameterized statement, and runs it against Aurora PostgreSQL over `psycopg` (port 5432).
-9. **Read credentials (no NAT)** — Tool_Lambda reads the Aurora read-only DB credential from AWS Secrets Manager via an interface VPC endpoint — no NAT gateway, nothing leaves the VPC.
+The Agent Lambda IAM role is scoped to the model ARN set at deployment. If you change `model_id` (or the `ModelId` stack parameter), re-run the deploy so that `provision_iam_ddb` rewrites the role policy and `deploy_agent` updates the function's `MODEL_ID`; otherwise the next invoke fails authorization on the new model.
 
-The rows flow back Aurora → Tool_Lambda → Gateway → agent; the agent feeds the real numbers to Bedrock to phrase a clean answer, saves the turn to Memory, and returns the answer in the HTTP response, which the browser displays. CloudWatch + AgentCore Observability capture logs/traces throughout (with DB credentials redacted).
+## Governed text-to-SQL security design
 
-## The one-line story
+The chatbot answers natural-language questions with data from SQL queries, but the model doesn't write SQL. It chooses a tool and fills in a structured request (filters, grouping, aggregations, sort order, and row limit), and the Tool Lambda code builds the query. If a model could generate arbitrary SQL, a prompt injection could read data it shouldn't or try to change records. The following layers reduce that risk:
 
-A user types a plain-English question in a browser; the system answers it from the program data in a database — without anyone writing SQL, and with all data and AI inference staying within a single AWS Region (everything runs in AWS Mumbai, `ap-south-1`).
+- **Tool boundary** — the agent can call only four tools, and each tool is fixed to one table:
 
-## The components (who does what)
+  | Tool | Table | What it returns |
+  |------|-------|-----------------|
+  | `query_applications` | `applications` | Rows or aggregates from application records |
+  | `query_subsidy` | `subsidy` | Rows or aggregates from subsidy disbursement records |
+  | `query_installation` | `installation` | Rows or aggregates from installation records |
+  | `query_inspection` | `inspection` | Rows or aggregates from inspection records |
 
-- **AWS WAF (web ACL on the Amplify app)** — the firewall in front of the dashboard. Every request for the UI is inspected first: a rate-based rule throttles floods per client IP, and AWS-managed rule sets block known-bad IPs, common exploits (XSS, LFI), and known malicious inputs. Amplify's firewall integration requires this web ACL in the global (CloudFront) scope — it is firewall *configuration* only and carries no program data (see [Data residency & the Amplify firewall](DEPLOYMENT.md#data-residency--amplify)).
-- **Browser UI (AWS Amplify)** — the dashboard with charts + a chat box. Static page, hosted in-region.
-- **API Gateway (REST API)** — the front door. The browser POSTs the question here.
-- **Agent_Lambda (the "brain")** — runs a Strands AI agent. It interprets the question, decides what data to fetch, and writes the final natural-language answer.
-- **Amazon Bedrock (in-region ON_DEMAND model)** — the LLM the agent calls to reason and to phrase the answer. Model-agnostic: any bare in-region modelId with Converse tool-use support works (see [model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html)). Runs in-region, on-demand.
-- **AgentCore Gateway** — a secure "tool counter." It exposes 4 safe, read-only query tools (one per data table) to the agent. The agent can't touch the database directly — only through these governed tools.
-- **Tool_Lambda** — the only thing that talks to the database. It accepts a structured request (filters, group-by, totals, sort), builds a safe read-only SQL query, and returns rows. No raw SQL is ever allowed.
-- **Aurora PostgreSQL (Serverless v2)** — the database holding the curated program data, in private subnets (not reachable from the internet).
-- **AgentCore Memory** — remembers the conversation so follow-up questions work ("…and how many in Gujarat?").
+- **Request validation** — `src/tool/validate.py` checks each request against an allowlist of columns, filter operators, and aggregation functions for that table. A request with a field outside the allowlist, including a raw `sql` field, is rejected before a query is built.
+- **Parameterized query builder** — `src/tool/query_builder.py` takes table and column names from the allowlist, not from the request, and binds filter values and the row limit as query parameters. This helps protect against SQL injection.
+- **Read-only database access** — the function connects as a database role that has `SELECT` privileges, with `INSERT`, `UPDATE`, `DELETE`, and `TRUNCATE` revoked, and opens a read-only session.
+- **Row limits** — queries return up to 100 rows by default and 1,000 at most, and the response shows when results were cut off.
+- **Credential isolation** — database credentials are stored in Secrets Manager and read from inside the VPC through the endpoint. They aren't stored in code or environment variables, and the function redacts credential values from its log lines.
 
-## The flow — what happens when someone asks a question
+An accepted request, which counts applications by state and returns the top five:
 
-1. **Ask** — In the browser, the user types "Which are the top 5 states by applications?" The page sends it over HTTPS to the REST API.
-2. **Route** — API Gateway hands the question to the Agent_Lambda.
-3. **Recall** — The agent loads the recent conversation from AgentCore Memory (so follow-ups have context).
-4. **Reason** — The agent sends the question to Bedrock. The model doesn't know the data; it decides which tool to call and with what parameters — e.g. "query the applications table, group by state, count, sort descending, top 5."
-5. **Fetch (safely)** — That tool call goes through the AgentCore Gateway (authenticated) to the Tool_Lambda. The Tool_Lambda validates the request against a strict whitelist, builds a read-only SQL `SELECT`, and runs it against Aurora.
-6. **Return data** — Aurora returns the rows → Tool_Lambda → Gateway → back to the agent.
-7. **Compose** — The agent feeds the real numbers back to the model, which writes a clean, plain-English answer.
-8. **Remember & reply** — The agent saves the turn to Memory and returns the answer in the HTTP response. The browser displays it.
-
-> The LLM is the reasoning brain, but it never sees the database. It can only ask pre-approved, read-only questions through a guarded gateway. So you get natural-language flexibility with database-grade safety.
-
-## The three messages that matter
-
-- **Data residency** — Every box (database, AI inference, APIs, hosting) is in Mumbai (`ap-south-1`). The AI model is invoked in-region on-demand, never through a cross-region inference profile. The only component outside the Region is the user's browser, and it only ever receives the final answer text — never raw data. No customer-managed CloudFront distribution in the stack; the global resources are configuration only — the WAF web ACL protecting the UI (required by Amplify's firewall integration; firewall rules only, request sampling disabled by default) and IAM roles.
-- **Security** — The Amplify-hosted dashboard sits behind an AWS WAF web ACL (rate limiting + AWS managed rules against known-bad IPs, common exploits, and malicious inputs). The chat API itself is open for the demo — the browser calls `POST /chat` directly, with no authorizer — so add an authorizer and a regional web ACL on the API stage before any non-demo exposure (see [Authorizer gap](DEPLOYMENT.md#authorizer-gap-production)). The database is private (no public access). The agent can't run arbitrary SQL — it can only call 4 read-only tools through an authenticated gateway, and every query is built from a validated whitelist, so SQL injection and writes are impossible. Credentials live in Secrets Manager, never in code or logs.
-- **No hallucination** — Every number in an answer comes from a live database query. If the data can't answer (e.g. weather, or a field we don't have), the bot says so instead of guessing.
-
-## If someone asks "why not just ChatGPT on the data?"
-
-Two reasons: (1) **residency** — this keeps all data and inference within the target Region (`ap-south-1`); (2) **trust** — answers are computed from the actual database via governed read-only tools, not generated from the model's memory, so the figures are auditable and correct.
-
-## Capabilities to highlight (what kinds of questions it handles)
-
-Counts, totals, breakdowns by any dimension (state, bank, discom, gender, category), leaderboards ("top 5 states", "highest-disbursing bank"), fraud signals (duplicate bank accounts, beneficiaries who took the subsidy more than once), and turnaround-time metrics — all in plain English.
-
-The architecture flow, end to end:
-
-```
-Browser → AWS WAF → Amplify → API Gateway (REST) → Agent_Lambda → Bedrock / Memory / Gateway → Tool_Lambda → Aurora
+```json
+{
+  "table": "applications",
+  "group_by": ["state"],
+  "aggregations": [{"fn": "count", "column": "application_id", "alias": "applications"}],
+  "order_by": [{"by": "applications", "direction": "desc"}],
+  "limit": 5
+}
 ```
 
-## Request workflow (step by step)
+A rejected request, because `sql` isn't a field in the request contract:
 
-1. Ask (browser). The user types a question in the Amplify-hosted page (served through the AWS WAF firewall attached to the Amplify app); JavaScript `fetch()`-POSTs `{question, sessionId}` to `POST /chat`. `sessionId` keeps follow-ups in one conversation.
-2. Front door (API Gateway REST). `POST /chat` is an `AWS_PROXY` integration straight to Agent_Lambda (`OPTIONS /chat` handles CORS preflight).
-3. Agent_Lambda (`src/agent/handler.py`). Detects the HTTP shape and runs one turn. `residency_guard(MODEL_ID)` (cold start) hard-fails on any cross-region inference-profile id (`us.*`/`eu.*`/`ap.*`/`apac.*`/`jp.*`/`au.*`/`global.*`), guaranteeing in-region inference. The guard is model-agnostic — it validates the ID format regardless of which foundation model you configure.
-4. Recall (AgentCore Memory). `memory.load()` folds the prior turns for this session into the system prompt, so follow-ups have context.
-5. Reason (Bedrock, in-region ON_DEMAND). A Strands agent + the system prompt (`prompt.py`) let the model pick which `query_<table>` tool to call and with what arguments. The model never sees the database — it only chooses a tool and parameters.
-6. Tool call (MCP + SigV4). The call is SigV4-signed for `bedrock-agentcore` and sent to the AgentCore Gateway, which uses `AWS_IAM` auth — unsigned callers are rejected.
-7. Gateway → Tool_Lambda. The Gateway exposes exactly 4 read-only tools and forwards the request to Tool_Lambda (the only component inside the private VPC), with `table` pinned per tool.
-8. Safe execution (`src/tool/`). `validate.py` rejects anything off the whitelist (or raw SQL) and runs nothing; `query_builder.py` builds a `SELECT`-only, fully parameterized statement; `handler.py` reads the read-only DB secret via a VPC endpoint (no NAT) and queries Aurora as a read-only user. Credentials are redacted from logs.
-9. Query Aurora. The private Aurora PostgreSQL runs the parameterized `SELECT` and returns rows.
-10. Compose. Rows flow back up; the model phrases a plain-English answer from the real numbers; `_clean_answer()` strips any query jargon.
-11. Remember + reply. `memory.save()` persists the turn and the answer is returned in the HTTP response; the browser renders it.
+```json
+{"table": "applications", "sql": "SELECT * FROM applications"}
+```
 
-Two guarantees: every number comes from a live query (no hallucinated figures — if the data can't answer, the bot says so), and no data leaves the Region (every hop is in `ap-south-1`; only the browser is outside, and it receives just the answer text). See [ARCHITECTURE.md](ARCHITECTURE.md) for the full version.
+The validation returns `{"executed": false, "error": "raw SQL or unsupported field(s) not allowed: sql"}`.
+
+A model that's affected by prompt injection still can't reach the database directly, but it can call the allowed tools. The tools limit what it can read. As an extra layer, you can add [Amazon Bedrock Guardrails](https://aws.amazon.com/bedrock/guardrails/), for example the prompt attack filter or word filters for SQL keywords in user input. If you do, confirm that Guardrails is available in your Region and keep guardrail cross-Region inference turned off.
+
+## What kinds of questions it handles
+
+Counts, totals, breakdowns by a dimension (state, bank, discom, gender, category), leaderboards ("top 5 states", "highest-disbursing bank"), duplicate and repeat-beneficiary checks, and turnaround-time metrics, all in plain English. Each number in an answer comes from a live database query; if the data can't answer (for example, a field the tables don't have), the bot says so instead of guessing. Answers are only as current as the data loaded into the database.
+
+## Comparing this approach to Amazon Bedrock Knowledge Bases
+
+[Amazon Bedrock Knowledge Bases](https://aws.amazon.com/bedrock/knowledge-bases/) can also answer questions from your data, with either a structured data store or a vector store for Retrieval Augmented Generation (RAG).
+
+| Approach | Limitation for this use case | When to use it |
+|----------|------------------------------|----------------|
+| Structured knowledge base | Uses Amazon Redshift as the query engine, with data in Redshift or in Amazon S3 through the AWS Glue Data Catalog, so it doesn't query Aurora PostgreSQL directly. The service generates the SQL, which gives you less control over which tables and columns a query can use. For `ap-south-1`, AWS documentation notes that requests might be processed in Regions outside the local geography. | When your data is in Redshift or the Data Catalog and your residency requirements allow the Regions where requests are processed. |
+| Vector knowledge base (RAG) | Returns passages that are similar to the question. It can't compute exact counts, sums, or rankings from structured data. | When answers come from unstructured documents, such as manuals, policy documents, and presentations. |
+| Custom governed tools (this solution) | You build the tool layer, and you maintain the allowlist as the database schema changes. | When you need exact computed answers from structured data and control over where processing happens. |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the internals: module layout, the agent loop, the MCP/SigV4 client, and the validator and query builder.
 
 ## Production considerations (deploying against an existing database)
 
@@ -164,15 +187,44 @@ The one-click deploy is self-contained: it creates a **new VPC** and its **own A
 
 In short: for production, skip the "create new VPC + new Aurora + load sample data" steps and instead wire the Tool_Lambda into the existing VPC and the reader endpoint of the existing cluster. The rest of the stack (Agent_Lambda, Bedrock, AgentCore Gateway/Memory, API, UI) is unchanged.
 
+## Before you use this in production
+
+The sample is set up for evaluation. Before you use it with real data:
+
+- **Add authentication and throttling to the API.** The REST API has no authorizer and allows requests from any origin. Add an authorizer, such as Amazon Cognito or IAM authorization, set stage throttling, restrict CORS to your UI's domain, and associate a regional AWS WAF web ACL with the API stage (see [Authorizer gap](DEPLOYMENT.md#authorizer-gap-production)).
+- **Attach the Agent Lambda function to the VPC.** It runs outside the VPC today because it calls Bedrock and AgentCore, so it has outbound internet access. Attach it to private subnets and add interface VPC endpoints for Bedrock, AgentCore, AWS STS, and Amazon CloudWatch Logs, after you confirm the endpoints are available in your Region.
+- **Restrict outbound security group rules** for the Tool Lambda function to the Aurora and Secrets Manager endpoint security groups. The route table is what keeps its traffic inside the VPC today.
+- **Set log retention** on the CloudWatch log groups (the sample doesn't set one), and use AWS CloudTrail for API-level audit records.
+- **Review the IAM policies** rendered by `deploy/render_deployer_policy.py` against your own standards. The Agent Lambda role is already scoped to the configured model ARN, the gateway ARN, and the memory ARN.
+
+## Clean up
+
+To avoid ongoing charges, remove the resources the solution created. Start the cleanup build first:
+
+```bash
+aws codebuild start-build \
+  --project-name residency-chatbot-deploy-<your-account-id> \
+  --environment-variables-override name=ACTION,value=cleanup,type=PLAINTEXT \
+  --region ap-south-1
+```
+
+After the build finishes, delete the launcher stack:
+
+```bash
+aws cloudformation delete-stack --stack-name residency-chatbot-launcher --region ap-south-1
+```
+
+The cleanup build removes the AWS WAF web ACL, the VPC, the Aurora cluster (without a final snapshot), the Lambda functions, the Amazon ECR repository, the AgentCore Gateway and Memory, the API Gateway APIs, the Amplify app, the DynamoDB table, the read-only database secret, and the IAM roles that the deployment created. It also deletes the demo data bucket. It keeps the CloudWatch log groups, so delete them yourself if you don't need them, along with the S3 bucket that you created for the source bundle. If you deployed with `deploy.py`, run `uv run python cleanup.py` instead.
+
 ## Adapting to your Region and use case
 
-This repository documents the pattern with `ap-south-1` (Mumbai) and a rooftop-solar subsidy program as the concrete, deployable reference. The residency controls are not India-specific — the same five controls apply to any geography with data-residency requirements (EU, Middle East, Southeast Asia, and others):
+This repository documents the pattern with `ap-south-1` (Mumbai) and a rooftop-solar subsidy program as the concrete, deployable reference. The residency controls aren't India-specific; you can adapt them for other sectors and geographies, such as organizations that work under EU data-protection rules or financial-services regulations in Southeast Asia, after you confirm that the required services and an in-Region model are available in the target Region:
 
-1. **Region** — the Region is pinned in `infra/config.py` (`REGION`). Change it to your target Region; every data-path client in the stack is region-pinned from that one value. One deliberate exception: the WAF web ACL for the Amplify UI is always created in the global CloudFront scope (`us-east-1`), because Amplify's firewall integration accepts nothing else — this is firewall configuration, not data, but if your governance forbids even that, disable the `provision_waf` step (see [DEPLOYMENT.md](DEPLOYMENT.md#data-residency--amplify)).
-2. **Model** — pick a bare in-region ON_DEMAND model with Converse tool-use support from the [Bedrock model support by Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html) page and set `model_id` in `deploy.config.json`. Availability differs per Region and changes over time.
-3. **Residency guard** — `src/agent/residency.py` rejects all cross-region inference-profile prefixes (`us.*`, `eu.*`, `ap.*`, `apac.*`, `jp.*`, `au.*`, `global.*`) regardless of target Region; no change needed.
-4. **Data model** — replace the 4 curated tables and the whitelist in `src/common/schema.py` with your own tables/columns; the validator, query builder, and Gateway tool definitions all derive from that single schema module.
-5. **Regulatory mapping** — which regulation (if any) requires residency is sector- and geography-specific. This architecture guarantees the technical fact — all data and inference stay in one Region — and you map that control to your own regulatory obligations.
+1. **Region** — the Region is pinned in `infra/config.py` (`REGION`) and in the two Lambda handlers; it is not a stack parameter. Change it to your target Region; the data-path clients in the stack are Region-pinned from that value. One deliberate exception: the WAF web ACL for the Amplify UI is always created in the global CloudFront scope (`us-east-1`), because Amplify's firewall integration accepts nothing else. This is firewall configuration, not data, but if your rules don't allow global configuration resources, disable the `provision_waf` step (see [DEPLOYMENT.md](DEPLOYMENT.md#data-residency--amplify)).
+2. **Model** — pick a model with a base model ID that supports in-Region on-demand invocation and Converse tool-use in your Region from [Model support by AWS Region](https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html), and set `model_id` in `deploy.config.json`. Availability differs per Region and changes over time. The Agent Lambda role is scoped to this model's ARN.
+3. **Residency guard** — `src/agent/residency.py` rejects the known cross-Region inference-profile prefixes (`us.*`, `eu.*`, `ap.*`, `apac.*`, `jp.*`, `au.*`, `global.*`) regardless of target Region; no change needed. If your requirement is in-country rather than single-Region and Bedrock offers a geographic inference profile for that country, the guard and the IAM policy block it too, so adjust both if you choose that option.
+4. **Data model** — replace the 4 curated tables and the allowlist in `src/common/schema.py` with your own tables and columns; the validator, query builder, and Gateway tool definitions all derive from that single schema module.
+5. **Regulatory mapping** — which regulation (if any) requires residency is sector- and geography-specific. The controls in this repository apply to data-plane processing: the services that process prompts, model output, and query results run in one Region. Map that to your own obligations with your legal and compliance teams; using this sample doesn't by itself make you compliant with a regulation.
 
 ## Documentation
 

@@ -36,7 +36,24 @@ import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE = os.path.join(HERE, "codebuild-deploy.yaml")
+CONFIG_PATH = os.path.join(HERE, "..", "deploy.config.json")
 REGION = "ap-south-1"  # fixed for data residency; matches infra/config.py
+
+
+def _configured_model_id() -> str:
+    """model_id the way deploy.py resolves it: CHATBOT_MODEL_ID, then deploy.config.json.
+
+    The template's BedrockInvokeInRegion statement is scoped to this one model
+    (``${ModelId}``), so the rendered deployer policy needs the same value.
+    """
+    env = os.environ.get("CHATBOT_MODEL_ID")
+    if env:
+        return env
+    try:
+        with open(CONFIG_PATH) as f:
+            return str(json.load(f).get("model_id") or "")
+    except (OSError, ValueError):
+        return ""
 
 # Statements that exist only for the CodeBuild launcher, not for Option B.
 LAUNCHER_ONLY_SIDS = {"ReadSourceBundle"}
@@ -85,12 +102,14 @@ def _load_template(path: str) -> dict:
         return yaml.load(f, Loader=_CfnLoader)  # nosec B506
 
 
-def _resolve(value, account: str):
-    """Resolve Fn::Sub / Ref pseudo-parameters into concrete strings."""
+def _resolve(value, account: str, model_id: str):
+    """Resolve Fn::Sub / Ref pseudo-parameters (and the ModelId parameter) into strings."""
     if isinstance(value, dict):
         if "Fn::Sub" in value:
             s = value["Fn::Sub"]
-            s = s.replace("${AWS::Region}", REGION).replace("${AWS::AccountId}", account)
+            s = (s.replace("${AWS::Region}", REGION)
+                  .replace("${AWS::AccountId}", account)
+                  .replace("${ModelId}", model_id))
             if re.search(r"\$\{[^}]+\}", s):
                 raise SystemExit(f"unresolved substitution in template: {s}")
             return s
@@ -99,10 +118,12 @@ def _resolve(value, account: str):
                 return REGION
             if value["Ref"] == "AWS::AccountId":
                 return account
+            if value["Ref"] == "ModelId":
+                return model_id
             raise SystemExit(f"unresolved Ref in template: {value['Ref']}")
-        return {k: _resolve(v, account) for k, v in value.items()}
+        return {k: _resolve(v, account, model_id) for k, v in value.items()}
     if isinstance(value, list):
-        return [_resolve(v, account) for v in value]
+        return [_resolve(v, account, model_id) for v in value]
     return value
 
 
@@ -114,7 +135,7 @@ def _iam_size(doc: dict) -> int:
     return len(re.sub(r"\s", "", json.dumps(doc)))
 
 
-def render(account: str) -> list[tuple[str, dict]]:
+def render(account: str, model_id: str) -> list[tuple[str, dict]]:
     """Return [(policy_name, policy_document), ...] — one per managed policy.
 
     The launcher attaches its permissions to the CodeBuild role as several
@@ -134,7 +155,8 @@ def render(account: str) -> list[tuple[str, dict]]:
         if pol.get("Type") != "AWS::IAM::ManagedPolicy":
             continue  # AWS-managed ARN strings, if any, are not rendered
         statements = [
-            _resolve(s, account) for s in pol["Properties"]["PolicyDocument"]["Statement"]
+            _resolve(s, account, model_id)
+            for s in pol["Properties"]["PolicyDocument"]["Statement"]
             if s.get("Sid") not in LAUNCHER_ONLY_SIDS
         ]
         doc = {"Version": "2012-10-17", "Statement": statements}
@@ -153,11 +175,20 @@ def main() -> None:
     ap.add_argument("--account", required=True, help="12-digit AWS account id")
     ap.add_argument("--out-dir", default=".",
                     help="directory to write <policy-name>.json files into (default: cwd)")
+    ap.add_argument("--model-id", default=None,
+                    help="bare in-region Bedrock modelId the deploy uses; the Bedrock "
+                         "statement is scoped to it (default: CHATBOT_MODEL_ID, then "
+                         "model_id in deploy.config.json)")
     args = ap.parse_args()
     if not (args.account.isdigit() and len(args.account) == 12):
         raise SystemExit("--account must be a 12-digit AWS account id")
+    model_id = args.model_id or _configured_model_id()
+    if not model_id:
+        raise SystemExit("no model id: pass --model-id, or set CHATBOT_MODEL_ID / "
+                         "model_id in deploy.config.json (the deployer policy is "
+                         "scoped to that single foundation model)")
     os.makedirs(args.out_dir, exist_ok=True)
-    for name, doc in render(args.account):
+    for name, doc in render(args.account, model_id):
         path = os.path.join(args.out_dir, f"{name}.json")
         with open(path, "w") as f:
             json.dump(doc, f, indent=2)
